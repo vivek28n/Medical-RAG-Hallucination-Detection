@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Header } from './components/Header';
 import { SearchBox } from './components/SearchBox';
 import { AnswerSection } from './components/AnswerSection';
@@ -13,7 +13,7 @@ import { Capabilities } from './components/Capabilities';
 import { HowItWorks } from './components/HowItWorks';
 import { GuidelinesSection } from './components/GuidelinesSection';
 import { AboutSection } from './components/AboutSection';
-import { mockResponse } from './data/mockResponse';
+import { askMedicalQuestion, ApiError } from './services/api';
 import type { AskResponse, Source } from './types/api';
 
 type AppState = 'landing' | 'loading' | 'result' | 'error';
@@ -23,7 +23,9 @@ function App() {
   const [query, setQuery] = useState('');
   const [response, setResponse] = useState<AskResponse | null>(null);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
-  const [loadingStep, setLoadingStep] = useState('');
+  const [loadingStep, setLoadingStep] = useState('Reviewing medical evidence…');
+  const [errorMessage, setErrorMessage] = useState<string | undefined>();
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const suggestions = [
     "What are the risk factors for type 2 diabetes?",
@@ -31,38 +33,67 @@ function App() {
     "How can diabetes be prevented or delayed?"
   ];
 
-  const handleSearch = (newQuery: string) => {
+  const handleSearch = async (newQuery: string) => {
+    if (!newQuery.trim()) return;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const newController = new AbortController();
+    abortControllerRef.current = newController;
+
     setQuery(newQuery);
+    setErrorMessage(undefined);
     setAppState('loading');
     window.scrollTo(0, 0);
-    
-    // Simulate steps
-    setLoadingStep("Retrieving evidence…");
-    setTimeout(() => {
-      setLoadingStep("Checking claims…");
-      setTimeout(() => {
-        setLoadingStep("Preparing evidence review…");
-        setTimeout(() => {
-          setResponse(mockResponse);
-          setAppState('result');
-          window.scrollTo(0, 0);
-        }, 600);
-      }, 600);
-    }, 600);
+
+    setLoadingStep("Reviewing medical evidence…");
+
+    try {
+      const data = await askMedicalQuestion(newQuery, newController.signal);
+      setResponse(data);
+      setAppState('result');
+      window.scrollTo(0, 0);
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
+      if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("MedGuide could not complete the evidence review. Please try again.");
+      }
+      setAppState('error');
+    } finally {
+      if (abortControllerRef.current === newController) {
+        abortControllerRef.current = null;
+      }
+    }
   };
 
   const resetToLanding = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     setAppState('landing');
     setQuery('');
     setResponse(null);
+    setErrorMessage(undefined);
     window.scrollTo(0, 0);
   };
 
   const handleNavClick = (targetId: string) => {
     if (appState !== 'landing') {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
       setAppState('landing');
       setQuery('');
       setResponse(null);
+      setErrorMessage(undefined);
       setTimeout(() => {
         if (targetId === 'top') {
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -100,8 +131,8 @@ function App() {
                 <span className="search-suggestions-label">Try asking</span>
                 <div className="suggestions-list">
                   {suggestions.map((suggestion, idx) => (
-                    <button 
-                      key={idx} 
+                    <button
+                      key={idx}
                       className="suggestion-btn"
                       onClick={() => handleSearch(suggestion)}
                     >
@@ -113,11 +144,11 @@ function App() {
             </section>
 
             <Capabilities />
-            
+
             <HowItWorks />
-            
+
             <GuidelinesSection />
-            
+
             <AboutSection />
           </div>
         )}
@@ -130,7 +161,7 @@ function App() {
 
         {appState === 'error' && (
           <div className="error-view">
-            <ErrorState onRetry={() => handleSearch(query)} />
+            <ErrorState onRetry={() => handleSearch(query)} message={errorMessage} />
           </div>
         )}
 
@@ -145,26 +176,26 @@ function App() {
 
             <div className="result-layout">
               <div className="main-column">
-                <AnswerSection 
-                  answer={response.answer} 
-                  isCorrected={response.self_correction.correction_applied} 
+                <AnswerSection
+                  answer={response.answer}
+                  isCorrected={response.self_correction.correction_applied}
                 />
-                
+
                 <ClaimVerification claims={response.claim_verification.claims} />
               </div>
-              
+
               <div className="side-column">
-                <VerificationSummary 
-                  decision={response.hallucination_decision} 
-                  confidence={response.confidence} 
-                  verification={response.claim_verification} 
+                <VerificationSummary
+                  decision={response.hallucination_decision}
+                  confidence={response.confidence}
+                  verification={response.claim_verification}
                 />
 
                 <VerificationDetails confidence={response.confidence} />
 
-                <SourceList 
-                  sources={response.sources} 
-                  onViewEvidence={(source) => setSelectedSource(source)} 
+                <SourceList
+                  sources={response.sources}
+                  onViewEvidence={(source) => setSelectedSource(source)}
                 />
               </div>
             </div>
