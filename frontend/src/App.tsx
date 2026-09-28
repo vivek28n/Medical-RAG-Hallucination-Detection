@@ -1,8 +1,29 @@
-import React, { useState } from 'react';
-import { Search, ShieldCheck, FileText, CheckCircle2 } from 'lucide-react';
+import { useState } from 'react';
+import { Header } from './components/Header';
+import { SearchBox } from './components/SearchBox';
+import { AnswerSection } from './components/AnswerSection';
+import { VerificationSummary } from './components/VerificationSummary';
+import { ClaimVerification } from './components/ClaimVerification';
+import { SourceList } from './components/SourceList';
+import { EvidenceDrawer } from './components/EvidenceDrawer';
+import { VerificationDetails } from './components/VerificationDetails';
+import { LoadingState } from './components/LoadingState';
+import { ErrorState } from './components/ErrorState';
+import { Capabilities } from './components/Capabilities';
+import { HowItWorks } from './components/HowItWorks';
+import { GuidelinesSection } from './components/GuidelinesSection';
+import { AboutSection } from './components/AboutSection';
+import { mockResponse } from './data/mockResponse';
+import type { AskResponse, Source } from './types/api';
+
+type AppState = 'landing' | 'loading' | 'result' | 'error';
 
 function App() {
+  const [appState, setAppState] = useState<AppState>('landing');
   const [query, setQuery] = useState('');
+  const [response, setResponse] = useState<AskResponse | null>(null);
+  const [selectedSource, setSelectedSource] = useState<Source | null>(null);
+  const [loadingStep, setLoadingStep] = useState('');
 
   const suggestions = [
     "What are the risk factors for type 2 diabetes?",
@@ -10,118 +31,166 @@ function App() {
     "How can diabetes be prevented or delayed?"
   ];
 
-  const handleSuggestionClick = (text: string) => {
-    setQuery(text);
+  const handleSearch = (newQuery: string) => {
+    setQuery(newQuery);
+    setAppState('loading');
+    window.scrollTo(0, 0);
+    
+    // Simulate steps
+    setLoadingStep("Retrieving evidence…");
+    setTimeout(() => {
+      setLoadingStep("Checking claims…");
+      setTimeout(() => {
+        setLoadingStep("Preparing evidence review…");
+        setTimeout(() => {
+          setResponse(mockResponse);
+          setAppState('result');
+          window.scrollTo(0, 0);
+        }, 600);
+      }, 600);
+    }, 600);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (query.trim()) {
-      // Future API call will go here
-      console.log('Searching for:', query);
+  const resetToLanding = () => {
+    setAppState('landing');
+    setQuery('');
+    setResponse(null);
+    window.scrollTo(0, 0);
+  };
+
+  const handleNavClick = (targetId: string) => {
+    if (appState !== 'landing') {
+      setAppState('landing');
+      setQuery('');
+      setResponse(null);
+      setTimeout(() => {
+        if (targetId === 'top') {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        } else {
+          document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 50);
+    } else {
+      if (targetId === 'top') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth' });
+      }
     }
   };
 
   return (
     <>
-      <header className="header">
-        <div className="header-container">
-          <div className="brand-area">
-            <span className="brand-name">MedGuide</span>
-            <span className="brand-desc">Medical Evidence Assistant</span>
-          </div>
-          <div className="nav-area">
-            <nav className="nav-links">
-              <a href="#">Guidelines</a>
-              <a href="#">How it works</a>
-              <a href="#">About</a>
-            </nav>
-            <div className="status-indicator">
-              <div className="status-dot"></div>
-              <span>System ready</span>
-            </div>
-          </div>
-        </div>
-      </header>
+      <Header onNavClick={handleNavClick} />
 
-      <main className="main-content">
-        <section className="hero">
-          <h1>Evidence, before answers.</h1>
-          <p>Ask questions grounded in trusted medical guidelines and research documents.</p>
-        </section>
+      <main className="main-content" id="top">
+        {appState === 'landing' && (
+          <div className="landing-view">
+            <section className="hero">
+              <h1>Evidence, before answers.</h1>
+              <p>Ask questions grounded in trusted medical guidelines and research documents.</p>
+            </section>
 
-        <section className="search-section">
-          <div className="search-container">
-            <form className="search-box" onSubmit={handleSubmit}>
-              <input
-                type="text"
-                className="search-input"
-                placeholder="What would you like to know?"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                aria-label="Search questions"
-              />
-              <button type="submit" className="search-button" aria-label="Search">
-                <Search size={20} />
+            <section className="search-section">
+              <div className="search-container">
+                <SearchBox onSearch={handleSearch} />
+              </div>
+
+              <div className="search-suggestions">
+                <span className="search-suggestions-label">Try asking</span>
+                <div className="suggestions-list">
+                  {suggestions.map((suggestion, idx) => (
+                    <button 
+                      key={idx} 
+                      className="suggestion-btn"
+                      onClick={() => handleSearch(suggestion)}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <Capabilities />
+            
+            <HowItWorks />
+            
+            <GuidelinesSection />
+            
+            <AboutSection />
+          </div>
+        )}
+
+        {appState === 'loading' && (
+          <div className="loading-view">
+            <LoadingState step={loadingStep} />
+          </div>
+        )}
+
+        {appState === 'error' && (
+          <div className="error-view">
+            <ErrorState onRetry={() => handleSearch(query)} />
+          </div>
+        )}
+
+        {appState === 'result' && response && (
+          <div className="result-view">
+            <div className="result-header">
+              <h2 className="result-query">"{query}"</h2>
+              <button className="new-question-btn" onClick={resetToLanding}>
+                New question
               </button>
-            </form>
-          </div>
+            </div>
 
-          <div className="search-suggestions">
-            <span className="search-suggestions-label">Try asking</span>
-            <div className="suggestions-list">
-              {suggestions.map((suggestion, idx) => (
-                <button
-                  key={idx}
-                  className="suggestion-btn"
-                  onClick={() => handleSuggestionClick(suggestion)}
-                >
-                  {suggestion}
-                </button>
-              ))}
+            <div className="result-layout">
+              <div className="main-column">
+                <AnswerSection 
+                  answer={response.answer} 
+                  isCorrected={response.self_correction.correction_applied} 
+                />
+                
+                <ClaimVerification claims={response.claim_verification.claims} />
+              </div>
+              
+              <div className="side-column">
+                <VerificationSummary 
+                  decision={response.hallucination_decision} 
+                  confidence={response.confidence} 
+                  verification={response.claim_verification} 
+                />
+
+                <VerificationDetails confidence={response.confidence} />
+
+                <SourceList 
+                  sources={response.sources} 
+                  onViewEvidence={(source) => setSelectedSource(source)} 
+                />
+              </div>
             </div>
           </div>
-        </section>
-
-        <section className="trust-strip">
-          <div className="trust-item">
-            <ShieldCheck size={28} className="trust-icon" strokeWidth={1.5} />
-            <span className="trust-title">Evidence grounded</span>
-            <span className="trust-desc">Responses are generated from retrieved medical documents.</span>
-          </div>
-          <div className="trust-item">
-            <CheckCircle2 size={28} className="trust-icon" strokeWidth={1.5} />
-            <span className="trust-title">Claim verification</span>
-            <span className="trust-desc">Claims are checked against supporting evidence.</span>
-          </div>
-          <div className="trust-item">
-            <FileText size={28} className="trust-icon" strokeWidth={1.5} />
-            <span className="trust-title">Source citations</span>
-            <span className="trust-desc">Relevant document pages remain visible.</span>
-          </div>
-        </section>
-
-        <section className="empty-state">
-          <FileText size={48} className="empty-icon" strokeWidth={1} />
-          <h2 className="empty-title">Your evidence review will appear here</h2>
-          <p className="empty-desc">Ask a question above to retrieve grounded medical information.</p>
-        </section>
+        )}
       </main>
 
       <footer className="footer">
         <div className="footer-container">
           <div className="footer-brand">
             <strong>MedGuide</strong>
-            <span>Evidence-grounded medical information</span>
+            <span>Medical Evidence Assistant</span>
           </div>
           <div className="footer-links">
-            <a href="#">Prototype • Research project</a>
+            <a href="#guidelines" onClick={(e) => { e.preventDefault(); handleNavClick('guidelines'); }}>Guidelines</a>
+            <a href="#how-it-works" onClick={(e) => { e.preventDefault(); handleNavClick('how-it-works'); }}>How it works</a>
+            <a href="#about" onClick={(e) => { e.preventDefault(); handleNavClick('about'); }}>About</a>
           </div>
-          <div className="footer-disclaimer">
-            Not a substitute for professional medical advice.
+          <div className="footer-meta-links">
+            <span className="footer-disclaimer">Not a substitute for professional medical advice.</span>
+            <span className="footer-project-type">Resume / research project</span>
           </div>
         </div>
       </footer>
+
+      <EvidenceDrawer source={selectedSource} onClose={() => setSelectedSource(null)} />
     </>
   );
 }
