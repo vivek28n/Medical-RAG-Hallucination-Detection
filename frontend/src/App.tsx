@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Header } from './components/Header';
 import { SearchBox } from './components/SearchBox';
 import { AnswerSection } from './components/AnswerSection';
@@ -13,8 +13,11 @@ import { Capabilities } from './components/Capabilities';
 import { HowItWorks } from './components/HowItWorks';
 import { GuidelinesSection } from './components/GuidelinesSection';
 import { AboutSection } from './components/AboutSection';
-import { askMedicalQuestion, ApiError } from './services/api';
+import { HolographicHeart } from './components/HolographicHeart';
+import { SystemTelemetry } from './components/SystemTelemetry';
+import { askMedicalQuestion, checkSystemHealth, ApiError } from './services/api';
 import type { AskResponse, Source } from './types/api';
+import { RotateCcw, Sparkles } from 'lucide-react';
 
 type AppState = 'landing' | 'loading' | 'result' | 'error';
 
@@ -25,6 +28,7 @@ function App() {
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const [loadingStep, setLoadingStep] = useState('Reviewing medical evidence…');
   const [errorMessage, setErrorMessage] = useState<string | undefined>();
+  const [isSystemReady, setIsSystemReady] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const suggestions = [
@@ -32,6 +36,30 @@ function App() {
     "What is prediabetes?",
     "How can diabetes be prevented or delayed?"
   ];
+
+  // Check backend health periodically
+  useEffect(() => {
+    let mounted = true;
+    const pollHealth = async () => {
+      try {
+        const data = await checkSystemHealth();
+        if (mounted) {
+          setIsSystemReady(data.ready);
+        }
+      } catch {
+        if (mounted) {
+          setIsSystemReady(false);
+        }
+      }
+    };
+
+    pollHealth();
+    const interval = setInterval(pollHealth, 20000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   const handleSearch = async (newQuery: string) => {
     if (!newQuery.trim()) return;
@@ -46,7 +74,7 @@ function App() {
     setQuery(newQuery);
     setErrorMessage(undefined);
     setAppState('loading');
-    window.scrollTo(0, 0);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 
     setLoadingStep("Reviewing medical evidence…");
 
@@ -54,7 +82,7 @@ function App() {
       const data = await askMedicalQuestion(newQuery, newController.signal);
       setResponse(data);
       setAppState('result');
-      window.scrollTo(0, 0);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         return;
@@ -62,7 +90,7 @@ function App() {
       if (error instanceof ApiError) {
         setErrorMessage(error.message);
       } else {
-        setErrorMessage("MedGuide could not complete the evidence review. Please try again.");
+        setErrorMessage("MedGuide could not complete the evidence review. Please verify backend connection.");
       }
       setAppState('error');
     } finally {
@@ -81,7 +109,7 @@ function App() {
     setQuery('');
     setResponse(null);
     setErrorMessage(undefined);
-    window.scrollTo(0, 0);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleNavClick = (targetId: string) => {
@@ -110,81 +138,124 @@ function App() {
     }
   };
 
+  // Determine heart visual status
+  const heartStatus =
+    appState === 'loading'
+      ? 'loading'
+      : appState === 'result' && response?.hallucination_decision?.decision === 'SUPPORTED'
+      ? 'verified'
+      : appState === 'result' && response?.hallucination_decision?.decision === 'POTENTIAL HALLUCINATION'
+      ? 'warning'
+      : 'idle';
+
   return (
-    <>
-      <Header onNavClick={handleNavClick} />
+    <div className="dark-healthcare-app">
+      {/* Background Cybernetic ECG & Particle Grids */}
+      <div className="ecg-ambient-grid" />
 
-      <main className="main-content" id="top">
-        {appState === 'landing' && (
-          <div className="landing-view">
-            <section className="hero">
-              <h1>Evidence, before answers.</h1>
-              <p>Ask questions grounded in trusted medical guidelines and research documents.</p>
-            </section>
+      <Header onNavClick={handleNavClick} isReady={isSystemReady} />
 
-            <section className="search-section">
-              <div className="search-container">
-                <SearchBox onSearch={handleSearch} />
-              </div>
-
-              <div className="search-suggestions">
-                <span className="search-suggestions-label">Try asking</span>
-                <div className="suggestions-list">
-                  {suggestions.map((suggestion, idx) => (
-                    <button
-                      key={idx}
-                      className="suggestion-btn"
-                      onClick={() => handleSearch(suggestion)}
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <Capabilities />
-
-            <HowItWorks />
-
-            <GuidelinesSection />
-
-            <AboutSection />
-          </div>
-        )}
-
-        {appState === 'loading' && (
-          <div className="loading-view">
-            <LoadingState step={loadingStep} />
-          </div>
-        )}
-
-        {appState === 'error' && (
-          <div className="error-view">
-            <ErrorState onRetry={() => handleSearch(query)} message={errorMessage} />
-          </div>
-        )}
-
-        {appState === 'result' && response && (
-          <div className="result-view">
-            <div className="result-header">
-              <h2 className="result-query">"{query}"</h2>
-              <button className="new-question-btn" onClick={resetToLanding}>
-                New question
-              </button>
+      <main className="dashboard-container" id="top">
+        {/* Top Inquiry Console (Search + Suggestion Chips) */}
+        <section className="search-console-wrapper">
+          <div className="console-headline-row">
+            <div className="console-tag">
+              <Sparkles size={14} className="neon-emerald" />
+              <span>CLINICAL EVIDENCE INTELLIGENCE CONSOLE</span>
             </div>
+            <span className="console-doc-ref">NIDDK Diabetes Guidelines • NIH Publication</span>
+          </div>
 
-            <div className="result-layout">
-              <div className="main-column">
+          <SearchBox onSearch={handleSearch} isLoading={appState === 'loading'} initialQuery={query} />
+
+          <div className="search-suggestions-row">
+            <span className="suggestions-prefix">Clinical Inquiries:</span>
+            <div className="suggestions-chips-group">
+              {suggestions.map((s, idx) => (
+                <button
+                  key={idx}
+                  className="suggestion-chip"
+                  onClick={() => handleSearch(s)}
+                  disabled={appState === 'loading'}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* Dual-Column Healthcare Workspace */}
+        <div className="workspace-dual-grid">
+          {/* LEFT COLUMN: Clinical Review Workflow */}
+          <div className="left-workflow-pane">
+            {appState === 'landing' && (
+              <div className="landing-content-stack">
+                <Capabilities />
+                <HowItWorks />
+                <GuidelinesSection />
+                <AboutSection />
+              </div>
+            )}
+
+            {appState === 'loading' && (
+              <div className="loading-workflow-wrapper">
+                <LoadingState step={loadingStep} />
+              </div>
+            )}
+
+            {appState === 'error' && (
+              <div className="error-workflow-wrapper">
+                <ErrorState onRetry={() => handleSearch(query)} message={errorMessage} />
+              </div>
+            )}
+
+            {appState === 'result' && response && (
+              <div className="result-workflow-stack">
+                <div className="result-header-bar">
+                  <div className="result-title-meta">
+                    <span className="query-label">ACTIVE INQUIRY</span>
+                    <h2 className="result-query-title">"{query}"</h2>
+                  </div>
+                  <button className="new-inquiry-btn" onClick={resetToLanding}>
+                    <RotateCcw size={14} />
+                    <span>New Inquiry</span>
+                  </button>
+                </div>
+
                 <AnswerSection
                   answer={response.answer}
-                  isCorrected={response.self_correction.correction_applied}
+                  isCorrected={response.self_correction?.correction_applied}
                 />
 
-                <ClaimVerification claims={response.claim_verification.claims} />
+                <ClaimVerification claims={response.claim_verification?.claims || []} />
+
+                <SourceList
+                  sources={response.sources || []}
+                  onViewEvidence={(source) => setSelectedSource(source)}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT COLUMN: 3D Holographic Heart Core & Real-time Telemetry */}
+          <div className="right-telemetry-pane">
+            {/* Holographic 3D Viewport Card */}
+            <div className="holographic-core-card glass-panel">
+              <div className="core-header">
+                <div className="core-title">
+                  <span className="radar-blip"></span>
+                  <span>HOLOGRAPHIC 3D CARDIAC CORE</span>
+                </div>
+                <span className="core-subtext">Interactive WebGL Wireframe</span>
               </div>
 
-              <div className="side-column">
+              <HolographicHeart status={heartStatus} />
+            </div>
+
+            {/* When viewing results: Display Verification HUD & Confidence Signals */}
+            {appState === 'result' && response?.hallucination_decision && response?.confidence && response?.claim_verification && (
+              <>
                 <VerificationSummary
                   decision={response.hallucination_decision}
                   confidence={response.confidence}
@@ -192,22 +263,20 @@ function App() {
                 />
 
                 <VerificationDetails confidence={response.confidence} />
+              </>
+            )}
 
-                <SourceList
-                  sources={response.sources}
-                  onViewEvidence={(source) => setSelectedSource(source)}
-                />
-              </div>
-            </div>
+            {/* Subsystem Technical Health Card */}
+            <SystemTelemetry isReady={isSystemReady} totalVectors={268} />
           </div>
-        )}
+        </div>
       </main>
 
-      <footer className="footer">
+      <footer className="footer-dark">
         <div className="footer-container">
           <div className="footer-brand">
-            <strong>MedGuide</strong>
-            <span>Medical Evidence Assistant</span>
+            <strong>MedGuide Clinical RAG</strong>
+            <span>Evidence Grounding &amp; Hallucination Detection</span>
           </div>
           <div className="footer-links">
             <a href="#guidelines" onClick={(e) => { e.preventDefault(); handleNavClick('guidelines'); }}>Guidelines</a>
@@ -215,14 +284,14 @@ function App() {
             <a href="#about" onClick={(e) => { e.preventDefault(); handleNavClick('about'); }}>About</a>
           </div>
           <div className="footer-meta-links">
-            <span className="footer-disclaimer">Not a substitute for professional medical advice.</span>
-            <span className="footer-project-type">Resume / research project</span>
+            <span className="footer-disclaimer">For clinical research &amp; educational verification. Not medical advice.</span>
+            <span className="footer-project-type">FAISS • DeBERTa-v3 • Gemini 3 Flash Preview</span>
           </div>
         </div>
       </footer>
 
       <EvidenceDrawer source={selectedSource} onClose={() => setSelectedSource(null)} />
-    </>
+    </div>
   );
 }
 

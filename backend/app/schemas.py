@@ -1,9 +1,17 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 
 
 class AskRequest(BaseModel):
-    query: str
+    query: str = Field(..., min_length=1, max_length=1000, description="User query about medical topics")
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_blank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Query cannot be empty or contain only whitespace.")
+        return stripped
 
 
 class SourceEvidence(BaseModel):

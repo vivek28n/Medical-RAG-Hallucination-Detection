@@ -105,6 +105,7 @@ def main():
 
     index_path = os.path.join(VECTOR_DB_DIR, "index.faiss")
     metadata_path = os.path.join(VECTOR_DB_DIR, "metadata.json")
+    embeddings_path = os.path.join(VECTOR_DB_DIR, "embeddings.npy")
 
     faiss.write_index(index, index_path)
     print(f"Saved FAISS index: {index_path}")
@@ -113,11 +114,15 @@ def main():
         json.dump(chunks, f, ensure_ascii=False, indent=2)
     print(f"Saved metadata: {metadata_path}")
 
+    np.save(embeddings_path, embeddings)
+    print(f"Saved pre-computed embeddings: {embeddings_path}")
+
     print("\nIngestion complete.")
     print(f"  Chunks: {len(chunks)}")
     print(f"  Dimensions: {embeddings.shape[1]}")
     print(f"  Index: {index_path}")
     print(f"  Metadata: {metadata_path}")
+    print(f"  Embeddings: {embeddings_path}")
 
 
 if __name__ == "__main__":

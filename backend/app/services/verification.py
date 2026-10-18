@@ -17,6 +17,7 @@ import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from app.config import settings
+from app.services.retrieval import is_reference_chunk
 
 
 class VerificationService:
@@ -62,7 +63,7 @@ class VerificationService:
             premise, hypothesis,
             return_tensors="pt",
             truncation=True,
-            max_length=512
+            max_length=384
         )
 
         with torch.no_grad():
@@ -99,7 +100,7 @@ class VerificationService:
                 batch_hypotheses,
                 return_tensors="pt",
                 truncation=True,
-                max_length=512,
+                max_length=384,
                 padding=True
             )
 
@@ -188,14 +189,24 @@ class VerificationService:
                 "emerging risk factors:",
                 "other risk factors include:",
                 "additional risk factors include:",
+                "risk factors include:",
+                "risk factors for type 2 diabetes:",
             ]
             if any(lower.startswith(h) for h in headings):
                 continue
 
-            # Skip umbrella introductions
-            if lower.startswith(
-                "based on the provided context, the risk factors"
-            ):
+            # Skip umbrella introductions and conversational preamble
+            preambles = [
+                "based on the provided context",
+                "based on the medical context",
+                "based on the context provided",
+                "based on the provided guidelines",
+                "according to the provided",
+                "according to the medical",
+                "the provided medical context",
+                "here are the risk factors",
+            ]
+            if any(lower.startswith(p) for p in preambles) or (lower.endswith(":") and len(lower.split()) < 10):
                 continue
 
             # Clean incomplete references
@@ -227,7 +238,7 @@ class VerificationService:
     def claim_to_hypothesis(claim: str) -> str:
         """
         Map medical claims to NLI-friendly hypothesis sentences.
-        Preserves diabetes-specific mappings only for exact known dataset patterns.
+        Preserves diabetes-specific mappings while handling natural clinical phrasing.
         """
         claim = re.sub(r"\s+", " ", claim).strip()
         claim = re.sub(r"\[[^\]]*\]", "", claim).strip()
@@ -235,11 +246,11 @@ class VerificationService:
         lower = claim.lower()
 
         # Age
-        if lower.startswith("age:") and "45" in lower:
+        if ("age" in lower and ("45" in lower or "older" in lower)) or (lower.startswith("age:") and "45" in lower):
             return "Increasing age is a risk factor for type 2 diabetes."
 
-        # Obesity
-        if lower.startswith("overweight") and "bmi" in lower:
+        # Obesity / Overweight
+        if ("overweight" in lower or "obese" in lower or "obesity" in lower) and ("bmi" in lower or "weight" in lower):
             return (
                 "Overweight or obesity is a risk factor for type 2 diabetes, "
                 "with increased risk associated with BMI ≥25 kg/m² "
@@ -247,18 +258,18 @@ class VerificationService:
             )
 
         # Prediabetes
-        if lower.startswith("prediabetes:") and ("a1c" in lower or "igt" in lower):
+        if "prediabetes" in lower and ("a1c" in lower or "igt" in lower or "risk" in lower or "factor" in lower or len(lower.split()) < 6):
             return "Prediabetes is a risk factor for type 2 diabetes."
 
         # Family history
-        if lower.startswith("family history:") and "diabetes" in lower:
+        if ("family history" in lower or "first-degree relative" in lower or "parent or sibling" in lower) and "diabetes" in lower:
             return (
                 "Having a parent or sibling with diabetes "
                 "is a risk factor for type 2 diabetes."
             )
 
         # High-risk populations
-        if lower.startswith("high-risk") and "african american" in lower:
+        if ("high-risk" in lower or "african american" in lower or "hispanic" in lower or "latino" in lower or "asian american" in lower) and ("race" in lower or "ethnic" in lower or "american" in lower):
             return (
                 "Being African American, Hispanic or Latino, "
                 "American Indian, Alaska Native, Asian American, "
@@ -267,36 +278,36 @@ class VerificationService:
             )
 
         # Gestational diabetes
-        if "gestational diabetes" in lower:
+        if "gestational" in lower and "diabetes" in lower:
             return (
                 "A history of gestational diabetes mellitus "
                 "is a risk factor for type 2 diabetes."
             )
 
         # Physical inactivity
-        if "physical inactivity" in lower and len(lower.split()) < 5:
+        if "physical inactivity" in lower or ("inactivity" in lower and "physical" in lower) or "sedentary" in lower:
             return "Physical inactivity is a risk factor for type 2 diabetes."
 
         # Hypertension
-        if lower.startswith("hypertension") and "140/90" in lower:
+        if ("hypertension" in lower or "blood pressure" in lower) and ("140/90" in lower or "bp" in lower or "therapy" in lower or len(lower.split()) < 6):
             return "Hypertension is a risk factor for type 2 diabetes."
 
         # HDL
-        if ("hdl-c" in lower or "high-density lipoprotein" in lower) and "35" in lower:
+        if ("hdl" in lower or "high-density lipoprotein" in lower) and ("35" in lower or "cholesterol" in lower or "low" in lower):
             return (
                 "A high-density lipoprotein cholesterol level "
                 "of 35 mg/dL or lower is a risk factor for type 2 diabetes."
             )
 
         # Triglycerides
-        if "triglyceride" in lower and "250" in lower:
+        if "triglyceride" in lower and ("250" in lower or "high" in lower or "fasting" in lower):
             return (
                 "A fasting triglyceride level of 250 mg/dL or higher "
                 "is a risk factor for type 2 diabetes."
             )
 
         # Insulin resistance
-        if "acanthosis nigricans" in lower and "polycystic ovary" in lower:
+        if "acanthosis" in lower or "polycystic" in lower or "pcos" in lower or "insulin resistance" in lower:
             return (
                 "Acanthosis nigricans, nonalcoholic steatohepatitis, "
                 "polycystic ovary syndrome, and other conditions "
@@ -305,25 +316,25 @@ class VerificationService:
             )
 
         # Cardiovascular disease
-        if "atherosclerotic cardiovascular disease" in lower:
+        if "cardiovascular" in lower or "cvd" in lower or "atherosclerotic" in lower:
             return (
                 "Atherosclerotic cardiovascular disease is a risk factor "
                 "for type 2 diabetes."
             )
 
         # Depression
-        if lower.startswith("depression") and len(lower.split()) < 5:
+        if "depression" in lower and len(lower.split()) < 6:
             return "Depression is a risk factor for type 2 diabetes."
 
         # Sleep apnea
-        if "obstructive sleep apnea" in lower:
+        if "sleep apnea" in lower:
             return (
                 "Obstructive sleep apnea is an emerging risk factor "
                 "for type 2 diabetes."
             )
 
         # Sleep deprivation
-        if "sleep deprivation" in lower and "6 hours" in lower:
+        if "sleep deprivation" in lower and ("6 hours" in lower or "chronic" in lower or len(lower.split()) < 8):
             return (
                 "Chronic sleep deprivation of less than 6 hours per day "
                 "is an emerging risk factor for type 2 diabetes."
@@ -334,6 +345,7 @@ class VerificationService:
             return claim
 
         return claim
+
 
     # ─── Claim Support Decision ──────────────────────────────────
 
@@ -416,37 +428,55 @@ class VerificationService:
         ).astype("float32")
 
         # 4. Retrieve evidence candidates
-        search_k = min(top_n, len(chunks))
+        search_k = min(max(top_n * 3, 15), len(chunks))
         distances, indices_arr = index.search(raw_query_embeddings, search_k)
 
         # 5. Normalize stored embeddings
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-12
         normalized_embeddings = embeddings / norms
 
-        # 6. Build NLI pairs
+        # 6. Build NLI pairs (prioritize non-reference clinical chunks)
         premises = []
         nli_hypotheses = []
         metadata = []
 
         for claim_idx in range(len(claims)):
+            claim_candidates = []
             for rank, chunk_idx in enumerate(indices_arr[claim_idx]):
                 chunk_idx = int(chunk_idx)
                 if chunk_idx < 0 or chunk_idx >= len(chunks):
                     continue
 
+                chunk = chunks[chunk_idx]
+                if is_reference_chunk(chunk.get("text", "")):
+                    continue
+
+                claim_candidates.append((rank, chunk_idx, chunk))
+                if len(claim_candidates) >= top_n:
+                    break
+
+            # Backfill if all candidates were bibliography references
+            if not claim_candidates:
+                for rank, chunk_idx in enumerate(indices_arr[claim_idx][:top_n]):
+                    chunk_idx = int(chunk_idx)
+                    if 0 <= chunk_idx < len(chunks):
+                        claim_candidates.append((rank, chunk_idx, chunks[chunk_idx]))
+
+            for rank, chunk_idx, chunk in claim_candidates:
                 similarity = float(np.dot(
                     normalized_embeddings[chunk_idx],
                     hypothesis_embeddings[claim_idx]
                 ))
 
-                premises.append(chunks[chunk_idx]["text"])
+                premises.append(chunk["text"])
                 nli_hypotheses.append(hypotheses[claim_idx])
                 metadata.append({
                     "claim_idx": claim_idx,
                     "rank": rank + 1,
-                    "chunk": chunks[chunk_idx],
+                    "chunk": chunk,
                     "similarity": similarity,
                 })
+
 
         # 7. Batched NLI
         nli_results = self.nli_score_batch(
@@ -546,8 +576,8 @@ class VerificationService:
 
         # 2. Claim-level NLI entailment
         valid = [
-            r for r in claim_verification["claims"]
-            if r["supported"] is not None
+            r for r in claim_verification.get("claims", [])
+            if r.get("evidence") and "entailment" in r["evidence"]
         ]
         if valid:
             scores = [r["evidence"]["entailment"] for r in valid]

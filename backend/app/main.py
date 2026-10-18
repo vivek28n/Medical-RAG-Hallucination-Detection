@@ -6,10 +6,23 @@ Wires the complete Notebook 08 pipeline:
   Confidence → Decision → Correction → Response
 """
 
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+import os
+import sys
 import traceback
+from contextlib import asynccontextmanager
+
+# Prevent Hugging Face tokenizers deadlock and tune PyTorch CPU threads
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import torch
+torch.set_num_threads(min(4, os.cpu_count() or 1))
+
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
+
+# Ensure backend root is in sys.path
+_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
 
 from app.config import settings
 from app.schemas import (
@@ -54,16 +67,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ─── CORS (for future React frontend) ────────────────────────────
+# ─── CORS ────────────────────────────────────────────────────────
+default_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:4173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://127.0.0.1:4173",
+]
+if settings.CORS_ORIGINS:
+    extra_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+    default_origins.extend(extra_origins)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174"
-    ],
+    allow_origins=list(set(default_origins)),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,15 +94,21 @@ app.add_middleware(
 # ─── Health Check ─────────────────────────────────────────────────
 
 @app.get("/health")
-def health_check():
+def health_check(response: Response):
+    models_status = {
+        "embedding": retrieval_service.embedding_model is not None,
+        "faiss_index": retrieval_service.index is not None,
+        "nli": verification_service._loaded,
+        "gemini": llm_service.client is not None,
+    }
+    all_ready = all(models_status.values())
+    if not all_ready:
+        response.status_code = 503
+
     return {
-        "status": "ok",
-        "models_loaded": {
-            "embedding": retrieval_service.embedding_model is not None,
-            "faiss_index": retrieval_service.index is not None,
-            "nli": verification_service._loaded,
-            "gemini": llm_service.client is not None,
-        },
+        "status": "ok" if all_ready else "degraded",
+        "ready": all_ready,
+        "models_loaded": models_status,
     }
 
 
@@ -93,13 +120,24 @@ def ask_question(request: AskRequest):
     Complete Notebook 08 pipeline:
     Query → Retrieve → Generate → Verify → Score → Decide → Correct → Respond
     """
+    if not retrieval_service.index or not retrieval_service.embedding_model:
+        raise HTTPException(
+            status_code=503,
+            detail="Vector database index is not ready. Please verify vector_db/index.faiss."
+        )
+    if not llm_service.client:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini LLM client is not configured. Please verify GEMINI_API_KEY in backend/.env."
+        )
+
     try:
         query = request.query
-        print(f"\n{'='*70}")
-        print(f"Query: {query}")
+        print(f"\n{'='*70}", flush=True)
+        print(f"Query: {query}", flush=True)
 
         # ── 1. RETRIEVAL ─────────────────────────────────────────
-        print("[1/7] Retrieving evidence...")
+        print("[1/7] Retrieving evidence...", flush=True)
         raw_results = retrieval_service.search(
             query, top_k=settings.RETRIEVAL_TOP_K
         )
@@ -120,15 +158,15 @@ def ask_question(request: AskRequest):
                 text=res["text"],
             ))
 
-        print(f"  Retrieved {len(raw_results)} chunks")
+        print(f"  Retrieved {len(raw_results)} chunks", flush=True)
 
         # ── 2. GROUNDED GENERATION ───────────────────────────────
-        print("[2/7] Generating grounded answer...")
+        print("[2/7] Generating grounded answer...", flush=True)
         answer = llm_service.generate_grounded_answer(query, context)
-        print(f"  Answer length: {len(answer)}")
+        print(f"  Answer length: {len(answer)}", flush=True)
 
         # ── 3. CLAIM VERIFICATION ────────────────────────────────
-        print("[3/7] Verifying claims...")
+        print("[3/7] Verifying claims...", flush=True)
         claim_verification_raw = verification_service.verify_claims(
             answer=answer,
             chunks=retrieval_service.metadata,
@@ -140,11 +178,12 @@ def ask_question(request: AskRequest):
         )
         print(
             f"  Claims: {claim_verification_raw['supported_claims']}"
-            f"/{claim_verification_raw['total_claims']} supported"
+            f"/{claim_verification_raw['total_claims']} supported",
+            flush=True
         )
 
         # ── 4. CONFIDENCE SCORING ────────────────────────────────
-        print("[4/7] Calculating confidence...")
+        print("[4/7] Calculating confidence...", flush=True)
         confidence_raw = verification_service.calculate_confidence(
             answer=answer,
             question=query,
@@ -154,19 +193,20 @@ def ask_question(request: AskRequest):
         )
         print(
             f"  Confidence: {confidence_raw['confidence_score']:.4f} "
-            f"({confidence_raw['confidence_level']})"
+            f"({confidence_raw['confidence_level']})",
+            flush=True
         )
 
         # ── 5. HALLUCINATION DECISION ────────────────────────────
-        print("[5/7] Determining hallucination status...")
+        print("[5/7] Determining hallucination status...", flush=True)
         decision_raw = verification_service.determine_decision(
             claim_verification=claim_verification_raw,
             confidence_result=confidence_raw,
         )
-        print(f"  Decision: {decision_raw['decision']}")
+        print(f"  Decision: {decision_raw['decision']}", flush=True)
 
         # ── 6. SELF-CORRECTION ───────────────────────────────────
-        print("[6/7] Self-correction check...")
+        print("[6/7] Self-correction check...", flush=True)
         correction_raw = correction_service.perform_correction(
             question=query,
             answer=answer,
@@ -176,7 +216,8 @@ def ask_question(request: AskRequest):
         )
         print(
             f"  Needed: {correction_raw['correction_needed']} | "
-            f"Applied: {correction_raw['correction_applied']}"
+            f"Applied: {correction_raw['correction_applied']}",
+            flush=True
         )
 
         final_answer = answer
@@ -186,7 +227,7 @@ def ask_question(request: AskRequest):
 
         # ── 6.5 RE-VERIFICATION ──────────────────────────────────
         if correction_raw["correction_applied"] and correction_raw.get("corrected_answer"):
-            print("[6.5/7] Re-verifying corrected answer...")
+            print("[6.5/7] Re-verifying corrected answer...", flush=True)
             final_answer = correction_raw["corrected_answer"]
 
             final_claim_verification = verification_service.verify_claims(
@@ -213,7 +254,7 @@ def ask_question(request: AskRequest):
             )
 
         # ── 7. BUILD RESPONSE ────────────────────────────────────
-        print("[7/7] Building response...")
+        print("[7/7] Building response...", flush=True)
 
         # Convert claim verification to schema objects
         claim_results = []
@@ -258,12 +299,17 @@ def ask_question(request: AskRequest):
             ),
         )
 
-        print(f"{'='*70}")
-        print("PIPELINE COMPLETE")
-        print(f"{'='*70}\n")
+        print(f"{'='*70}", flush=True)
+        print("PIPELINE COMPLETE", flush=True)
+        print(f"{'='*70}\n", flush=True)
 
         return response
 
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        err_str = str(e)
+        if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY in err_str:
+            err_str = err_str.replace(settings.GEMINI_API_KEY, "[REDACTED]")
+        raise HTTPException(status_code=500, detail=f"Inference error: {err_str}")

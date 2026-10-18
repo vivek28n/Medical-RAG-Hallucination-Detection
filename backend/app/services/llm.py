@@ -26,41 +26,62 @@ class LLMService:
 
     def _generate_with_retry(self, prompt: str) -> str:
         """
-        Call Gemini with retry logic.
-        Retries are intended for transient failures (e.g., 503, 429).
-        Ported from Notebook 08 generate_grounded_answer().
+        Call Gemini with model fallback and retry logic.
+        Retries transient failures and falls back to alternate models if quota is exhausted.
+        Sanitizes all error messages to guarantee API keys are never exposed.
         """
         if not self.client:
             raise RuntimeError("LLM client not initialized. Check API key.")
 
+        candidates = [
+            settings.GEMINI_MODEL_NAME,
+            "gemini-3-flash-preview",
+            "gemini-flash-lite-latest",
+            "gemini-2.0-flash",
+        ]
+        seen = set()
+        model_list = [m for m in candidates if not (m in seen or seen.add(m))]
+
         last_error = None
 
-        for attempt in range(1, settings.LLM_MAX_RETRIES + 1):
-            try:
-                response = self.client.models.generate_content(
-                    model=settings.GEMINI_MODEL_NAME,
-                    contents=prompt
-                )
+        for model_name in model_list:
+            for attempt in range(1, settings.LLM_MAX_RETRIES + 1):
+                try:
+                    response = self.client.models.generate_content(
+                        model=model_name,
+                        contents=prompt
+                    )
 
-                if response and response.text:
-                    return response.text.strip()
+                    if response and response.text:
+                        return response.text.strip()
 
-                last_error = "Gemini returned an empty response."
+                    last_error = f"Gemini ({model_name}) returned an empty response."
 
-            except Exception as e:
-                last_error = str(e)
-                print(
-                    f"Attempt {attempt}/{settings.LLM_MAX_RETRIES} "
-                    f"failed: {last_error}. (Note: retries are for transient issues like 503/429)"
-                )
+                except Exception as e:
+                    last_error = str(e)
+                    safe_err = last_error
+                    if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY in safe_err:
+                        safe_err = safe_err.replace(settings.GEMINI_API_KEY, "[REDACTED]")
 
-            if attempt < settings.LLM_MAX_RETRIES:
-                time.sleep(settings.LLM_RETRY_DELAY)
+                    print(
+                        f"Attempt {attempt}/{settings.LLM_MAX_RETRIES} on {model_name} "
+                        f"failed: {safe_err[:120]}..."
+                    )
+                    if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "404" in last_error:
+                        # Quota exceeded or model unavailable: immediately attempt next candidate
+                        break
+
+                if attempt < settings.LLM_MAX_RETRIES:
+                    time.sleep(settings.LLM_RETRY_DELAY)
+
+        safe_last = str(last_error)
+        if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY in safe_last:
+            safe_last = safe_last.replace(settings.GEMINI_API_KEY, "[REDACTED]")
 
         raise RuntimeError(
-            f"Gemini generation failed after {settings.LLM_MAX_RETRIES} "
-            f"attempts. Last error: {last_error}"
+            f"Gemini generation failed on all candidate models. Last error: {safe_last}"
         )
+
 
     def generate_grounded_answer(self, query: str, context: str) -> str:
         """

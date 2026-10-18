@@ -9,3 +9,6 @@ numpy
 python-dotenv
 transformers
 torch
+httpx
+pymupdf
+langchain-text-splitters

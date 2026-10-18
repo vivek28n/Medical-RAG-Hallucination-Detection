@@ -11,6 +11,22 @@ export class ApiError extends Error {
   }
 }
 
+export interface HealthStatus {
+  status: 'ok' | 'degraded';
+  ready: boolean;
+  models_loaded: {
+    embedding: boolean;
+    faiss_index: boolean;
+    nli: boolean;
+    gemini: boolean;
+  };
+}
+
+export const checkSystemHealth = async (): Promise<HealthStatus> => {
+  const response = await fetch(`${API_BASE_URL}/health`);
+  return await response.json();
+};
+
 export const askMedicalQuestion = async (
   query: string,
   signal?: AbortSignal
@@ -26,16 +42,28 @@ export const askMedicalQuestion = async (
     });
 
     if (!response.ok) {
+      let serverMessage = '';
+      try {
+        const errorJson = await response.json();
+        if (errorJson && typeof errorJson.detail === 'string') {
+          serverMessage = errorJson.detail;
+        } else if (errorJson && Array.isArray(errorJson.detail) && errorJson.detail[0]?.msg) {
+          serverMessage = errorJson.detail[0].msg;
+        }
+      } catch {
+        // Response body was not JSON
+      }
+
       if (response.status === 422) {
-        throw new ApiError('Invalid request format', 422);
+        throw new ApiError(serverMessage || 'Invalid question format. Please enter a valid medical question.', 422);
       }
       if (response.status === 503) {
-        throw new ApiError('The service is temporarily unavailable due to high demand. Please try again later.', 503);
+        throw new ApiError(serverMessage || 'The medical verification service is initializing or temporarily unavailable.', 503);
       }
       if (response.status === 500) {
-        throw new ApiError('An unexpected error occurred during the review process.', 500);
+        throw new ApiError(serverMessage || 'An unexpected error occurred during the review process.', 500);
       }
-      throw new ApiError(`Server returned status ${response.status}`, response.status);
+      throw new ApiError(serverMessage || `Server returned status ${response.status}`, response.status);
     }
 
     const data: AskResponse = await response.json();
@@ -47,6 +75,6 @@ export const askMedicalQuestion = async (
     if (error instanceof Error && error.name === 'AbortError') {
       throw error;
     }
-    throw new ApiError('Network error. MedGuide could not complete the evidence review.');
+    throw new ApiError('Network error. MedGuide could not connect to the backend server (ensure port 8000 is active).');
   }
 };
