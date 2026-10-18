@@ -11,9 +11,16 @@ import {
   FileText,
   Filter,
   Check,
+  Download,
+  FileCode,
 } from 'lucide-react';
 import type { EvaluationReport, BenchmarkItem, BenchmarkProvenance } from '../types/api';
-import { fetchBenchmark, runEvaluationBenchmark } from '../services/api';
+import {
+  fetchBenchmark,
+  runEvaluationBenchmark,
+  exportEvaluationMarkdown,
+  exportEvaluationJson,
+} from '../services/api';
 
 interface EvaluationLabProps {
   isOpen: boolean;
@@ -23,6 +30,8 @@ interface EvaluationLabProps {
 export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
+  const [exportingMd, setExportingMd] = useState(false);
+  const [exportingJson, setExportingJson] = useState(false);
   const [benchmarkItems, setBenchmarkItems] = useState<BenchmarkItem[]>([]);
   const [provenance, setProvenance] = useState<BenchmarkProvenance | null>(null);
   const [report, setReport] = useState<EvaluationReport | null>(null);
@@ -70,6 +79,44 @@ export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose })
     }
   };
 
+  const triggerDownload = (filename: string, content: string, mimeType: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportMarkdown = async () => {
+    setExportingMd(true);
+    setErrorMsg(null);
+    try {
+      const res = await exportEvaluationMarkdown();
+      triggerDownload(res.filename, res.content, 'text/markdown;charset=utf-8');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Markdown export failed.');
+    } finally {
+      setExportingMd(false);
+    }
+  };
+
+  const handleExportJson = async () => {
+    setExportingJson(true);
+    setErrorMsg(null);
+    try {
+      const res = await exportEvaluationJson();
+      triggerDownload(res.filename, res.content, 'application/json;charset=utf-8');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'JSON export failed.');
+    } finally {
+      setExportingJson(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   // Filter items
@@ -91,14 +138,36 @@ export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose })
             <div className="eval-title-row">
               <FlaskConical size={20} className="neon-cyan" />
               <h2 id="eval-lab-title" className="eval-heading">CLINICAL EVALUATION LAB</h2>
-              <span className="eval-version-pill">Benchmark v1.0</span>
+              <span className="eval-version-pill">Benchmark v2.0 (Phase 2)</span>
             </div>
             <p className="eval-subtext">
-              Reproducible Hallucination Detection Benchmark • NIDDK Guiding Principles for Diabetes Care
+              Curated Gold Regression Suite • NIDDK Guiding Principles for Diabetes Care
             </p>
           </div>
 
           <div className="eval-actions-group">
+            {report && (
+              <>
+                <button
+                  className="eval-export-btn"
+                  onClick={handleExportMarkdown}
+                  disabled={exportingMd || running}
+                  title="Export GitHub-Flavored Markdown Report"
+                >
+                  <Download size={13} />
+                  <span>{exportingMd ? 'Exporting…' : 'Export .MD'}</span>
+                </button>
+                <button
+                  className="eval-export-btn"
+                  onClick={handleExportJson}
+                  disabled={exportingJson || running}
+                  title="Export Raw Serialized JSON Report"
+                >
+                  <FileCode size={13} />
+                  <span>{exportingJson ? 'Exporting…' : 'Export .JSON'}</span>
+                </button>
+              </>
+            )}
             <button
               className="run-eval-btn"
               onClick={handleRunEvaluation}
@@ -164,12 +233,99 @@ export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose })
               <div className="initial-prompt-inner">
                 <Info size={24} className="neon-teal" />
                 <div className="initial-prompt-text">
-                  <h4>Benchmark Ready to Run</h4>
+                  <h4>Curated Gold Regression Suite Ready</h4>
                   <p>
                     {benchmarkItems.length} curated clinical probes from the NIDDK guidelines (Principles 1–7) are loaded.
-                    Click "Run Benchmark Evaluation" to test vector retrieval and DeBERTa-v3 NLI classification against ground truth.
+                    Evaluations execute generic claim-to-hypothesis generation, vector retrieval, and DeBERTa-v3 NLI classification using shared production logic.
                   </p>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Citation Alignment Audit Card */}
+          {report?.citation_summary && (
+            <div className="citation-audit-card card">
+              <div className="section-title-row">
+                <h3 className="section-title">CITATION AUDIT &amp; PAGE ALIGNMENT</h3>
+                <span className="citation-rate-pill">
+                  Audit Alignment Rate: {(report.citation_summary.alignment_rate * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="citation-stats-row">
+                <div className="citation-stat-chip">
+                  <span className="chip-label">Cited Probes:</span>
+                  <span className="chip-val">{report.citation_summary.total_cited_items}</span>
+                </div>
+                <div className="citation-stat-chip text-emerald">
+                  <span className="chip-label">Exact Page Matches:</span>
+                  <span className="chip-val">{report.citation_summary.matched}</span>
+                </div>
+                <div className="citation-stat-chip text-cyan">
+                  <span className="chip-label">Adjacent Pages (±1):</span>
+                  <span className="chip-val">{report.citation_summary.adjacent}</span>
+                </div>
+                <div className="citation-stat-chip text-amber">
+                  <span className="chip-label">Page Mismatches:</span>
+                  <span className="chip-val">{report.citation_summary.mismatched}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Baseline Comparison: Retrieval-Only vs Full Pipeline */}
+          {report?.baseline_comparison && (
+            <div className="baseline-comparison-section card">
+              <div className="section-title-row">
+                <div className="baseline-title-group">
+                  <h3 className="section-title">BASELINE COMPARISON (RETRIEVAL-ONLY VS FULL PIPELINE)</h3>
+                  <span className="baseline-badge">Vector Similarity Baseline vs Cross-Encoder DeBERTa-v3 NLI</span>
+                </div>
+                <div className="baseline-delta-chips">
+                  <span className="delta-chip highlight-emerald">
+                    Accuracy Gain: +{(report.baseline_comparison.accuracy_gain * 100).toFixed(1)}%
+                  </span>
+                  <span className="delta-chip highlight-teal">
+                    Macro F1 Gain: +{(report.baseline_comparison.f1_gain * 100).toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="baseline-table-wrapper">
+                <table className="baseline-table">
+                  <thead>
+                    <tr>
+                      <th>Pipeline</th>
+                      <th>Accuracy</th>
+                      <th>Macro Precision</th>
+                      <th>Macro Recall</th>
+                      <th>Macro F1</th>
+                      <th>Negation / Contradiction</th>
+                      <th>Clinical Methodology</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.baseline_comparison.comparison_table.map((row) => (
+                      <tr key={row.system} className={row.system.includes('MedGuide') ? 'row-highlight' : ''}>
+                        <td className="system-name-cell">
+                          <strong>{row.system}</strong>
+                        </td>
+                        <td>{(row.accuracy * 100).toFixed(1)}%</td>
+                        <td>{(row.macro_precision * 100).toFixed(1)}%</td>
+                        <td>{(row.macro_recall * 100).toFixed(1)}%</td>
+                        <td>{(row.macro_f1 * 100).toFixed(1)}%</td>
+                        <td>
+                          {row.contradiction_capable ? (
+                            <span className="badge-supported">Supported (NLI)</span>
+                          ) : (
+                            <span className="badge-unsupported">Blind to Negation</span>
+                          )}
+                        </td>
+                        <td className="notes-cell">{row.notes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -256,6 +412,9 @@ export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose })
                   <li>
                     <strong>Verifier:</strong> Cross-encoder DeBERTa-v3-base NLI + all-MiniLM-L6-v2 embeddings
                   </li>
+                  <li>
+                    <strong>Scope:</strong> Curated Gold Regression Suite (15 items) • Verified against PDF text
+                  </li>
                 </ul>
               </div>
 
@@ -273,6 +432,9 @@ export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose })
                   <li>
                     Evaluations are executed purely against retrieval and NLI modules without LLM calls,
                     ensuring reproducibility and zero quota consumption.
+                  </li>
+                  <li>
+                    This 15-item suite functions as a regression safety net, not an independent validation set.
                   </li>
                 </ul>
               </div>
@@ -375,9 +537,26 @@ export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose })
                         </div>
                         {item.citation_page && (
                           <div className="bm-telemetry-cell">
-                            <span className="bm-telemetry-label">Guideline Page:</span>
+                            <span className="bm-telemetry-label">PDF Page:</span>
                             <span className="bm-telemetry-val text-primary">
                               <FileText size={11} className="inline-icon" /> Page {item.citation_page}
+                              {item.booklet_page && <span className="booklet-note">(Booklet p. {item.booklet_page})</span>}
+                            </span>
+                          </div>
+                        )}
+                        {item.citation_alignment && item.citation_alignment !== 'NOT_APPLICABLE' && (
+                          <div className="bm-telemetry-cell">
+                            <span className="bm-telemetry-label">Citation:</span>
+                            <span className={`alignment-tag align-${item.citation_alignment.toLowerCase()}`}>
+                              {item.citation_alignment}
+                              {item.matched_page ? ` (p. ${item.matched_page})` : ''}
+                            </span>
+                          </div>
+                        )}
+                        {item.verification_status === 'FLAGGED_FOR_HUMAN_REVIEW' && (
+                          <div className="bm-telemetry-cell">
+                            <span className="review-flag-badge">
+                              <AlertTriangle size={11} /> Review Flag
                             </span>
                           </div>
                         )}
@@ -393,6 +572,12 @@ export const EvaluationLab: React.FC<EvaluationLabProps> = ({ isOpen, onClose })
                           {item.citation_page && (
                             <span className="bm-page-tag">
                               <FileText size={11} className="inline-icon" /> Page {item.citation_page}
+                              {item.booklet_page && <span className="booklet-note">(Booklet p. {item.booklet_page})</span>}
+                            </span>
+                          )}
+                          {item.verification_status === 'FLAGGED_FOR_HUMAN_REVIEW' && (
+                            <span className="review-flag-badge">
+                              <AlertTriangle size={11} /> Review Flag
                             </span>
                           )}
                         </div>

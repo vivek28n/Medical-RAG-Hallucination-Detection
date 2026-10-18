@@ -20,6 +20,7 @@ export interface Claim {
   claim: string;
   hypothesis: string;
   supported: boolean;
+  status?: 'SUPPORTED' | 'CONTRADICTED' | 'UNSUPPORTED' | string | null;
   evidence: ClaimEvidence | null;
 }
 
@@ -85,6 +86,8 @@ export interface BenchmarkItem {
   ground_truth: 'SUPPORTED' | 'CONTRADICTED' | 'UNSUPPORTED';
   principle?: string;
   citation_page?: number | null;
+  booklet_page?: number | null;
+  verification_status?: string | null;
   rationale?: string;
 }
 
@@ -101,10 +104,19 @@ export interface MetricSummary {
   specificity?: number;
 }
 
+export interface CitationAlignmentSummary {
+  total_cited_items: number;
+  matched: number;
+  adjacent: number;
+  mismatched: number;
+  alignment_rate: number;
+}
+
 export interface EvaluationItemResult {
   id: string;
   claim: string;
   hypothesis: string;
+  legacy_hypothesis?: string | null;
   ground_truth: 'SUPPORTED' | 'CONTRADICTED' | 'UNSUPPORTED';
   predicted: 'SUPPORTED' | 'CONTRADICTED' | 'UNSUPPORTED';
   is_correct: boolean;
@@ -113,7 +125,11 @@ export interface EvaluationItemResult {
   similarity: number;
   evidence_score: number;
   citation_page?: number | null;
+  booklet_page?: number | null;
+  verification_status?: string | null;
+  citation_alignment?: 'MATCHED' | 'ADJACENT_PAGE' | 'MISMATCHED' | 'NOT_APPLICABLE' | string;
   matched_chunk_id?: string | null;
+  matched_page?: number | null;
   matched_text?: string | null;
 }
 
@@ -122,9 +138,35 @@ export interface BenchmarkProvenance {
   publisher: string;
   document_pages: number;
   vector_chunks: number;
+  benchmark_type?: string;
+  dataset_scope?: string;
+  page_verification_method?: string;
   label_definitions: Record<string, string>;
   limitations: string[];
   reproduction_instructions: string;
+}
+
+export interface BaselineComparisonRow {
+  system: string;
+  accuracy: number;
+  macro_precision: number;
+  macro_recall: number;
+  macro_f1: number;
+  supported_f1: number;
+  contradiction_capable: boolean;
+  notes: string;
+}
+
+export interface BaselineComparisonSummary {
+  comparison_table: BaselineComparisonRow[];
+  accuracy_gain: number;
+  f1_gain: number;
+}
+
+export interface ExportReportResponse {
+  content: string;
+  filename: string;
+  format: string;
 }
 
 export interface EvaluationReport {
@@ -137,6 +179,8 @@ export interface EvaluationReport {
   per_class: Record<string, { precision: number; recall: number; f1_score: number; support: number }>;
   confusion_matrix: ConfusionMatrix;
   results: EvaluationItemResult[];
+  citation_summary?: CitationAlignmentSummary | null;
+  baseline_comparison?: BaselineComparisonSummary | null;
   provenance: BenchmarkProvenance;
 }
 

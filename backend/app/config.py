@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     RETRIEVAL_TOP_K: int = 10
     VERIFICATION_TOP_N: int = 5
     NLI_BATCH_SIZE: int = 16
+    USE_LEGACY_CLAIM_TEMPLATES: bool = False
 
     # --- CORS ---
     CORS_ORIGINS: str = ""

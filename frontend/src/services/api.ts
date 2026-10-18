@@ -103,6 +103,30 @@ export const runEvaluationBenchmark = async (): Promise<import('../types/api').E
   return await response.json();
 };
 
+export const exportEvaluationMarkdown = async (
+  useLegacyHypothesis: boolean = false
+): Promise<import('../types/api').ExportReportResponse> => {
+  const response = await fetch(`${API_BASE_URL}/api/evaluation/export/markdown?use_legacy_hypothesis=${useLegacyHypothesis}`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new ApiError('Failed to export evaluation report as Markdown');
+  }
+  return await response.json();
+};
+
+export const exportEvaluationJson = async (
+  useLegacyHypothesis: boolean = false
+): Promise<import('../types/api').ExportReportResponse> => {
+  const response = await fetch(`${API_BASE_URL}/api/evaluation/export/json?use_legacy_hypothesis=${useLegacyHypothesis}`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new ApiError('Failed to export evaluation report as JSON');
+  }
+  return await response.json();
+};
+
 export interface ChunkQueryParams {
   page?: number;
   search?: string;

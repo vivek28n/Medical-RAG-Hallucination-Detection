@@ -13,6 +13,7 @@ Provides:
 """
 
 import re
+from typing import Optional, List, Dict, Any, Union
 import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -150,95 +151,141 @@ class VerificationService:
     @staticmethod
     def extract_claims(answer: str) -> list:
         """
-        Extract individual factual claims from a medical answer.
-        Ported from Notebook 08 Cell 19 (final version).
+        Extract individual factual claims from a medical answer using general text processing.
+        Preserves negation, numbers, units, qualifiers, and clinically important context.
         """
         if not answer or not answer.strip():
             return []
 
         text = answer.strip()
 
-        # Remove page citations
-        text = re.sub(r"\s*\[Page\s+\d+\]", "", text)
+        # 1. Clean citation references (e.g. [Page 12], [p. 15], [1])
+        text = re.sub(r"\[(?:Page|p\.)\s*\d+(?:-\d+)?\]", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\[\d+\]", "", text)
 
-        # Remove markdown bold/italic
-        text = re.sub(r"\*\*", "", text)
-        text = re.sub(r"(?<!\*)\*(?!\*)", "", text)
+        # 2. Clean markdown bold, italic, code formatting without deleting enclosed content
+        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+        text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", text)
+        text = re.sub(r"__([^_]+)__", r"\1", text)
+        text = re.sub(r"`([^`]+)`", r"\1", text)
 
-        lines = text.splitlines()
-        claims = []
+        raw_lines = text.splitlines()
+        candidate_units = []
 
-        for line in lines:
+        # Common conversational preamble prefixes to strip from sentences
+        preamble_regex = re.compile(
+            r"^(?:"
+            r"(?:based on|according to|in accordance with|as per)\s+(?:the\s+)?(?:(?:provided|medical|retrieved|current|available|clinical)\s+)*(?:context|guidelines?|documents?|evidence|data|literature),?\s*"
+            r"|the\s+(?:(?:provided|retrieved|medical|clinical|available)\s+)*(?:context|documents?|guidelines?)\s+(?:states?|indicates?|shows?|recommends?|suggests?|notes?)\s+(?:that\s+)?"
+            r"|here\s+(?:are|is)\s+the\s+(?:risk factors|key factors|guidelines|recommendations|details|findings|considerations)\b[\s:]*"
+            r"|(?:it\s+is\s+important\s+to\s+note\s+that|it\s+should\s+be\s+noted\s+that|please\s+note\s+that|note\s+that)\s*"
+            r")",
+            re.IGNORECASE
+        )
+
+        for line in raw_lines:
             line = line.strip()
             if not line:
                 continue
 
-            # Remove bullets / numbering
-            line = re.sub(r"^\s*[-•*]\s*", "", line)
-            line = re.sub(r"^\s*\d+[.)]\s*", "", line)
-            line = line.strip()
-            if not line:
+            # Check if this line is an itemized list (bullet / number)
+            is_list_item = bool(re.match(r"^[-•*]\s+|^\d+[.)]\s+", line))
+            clean_line = re.sub(r"^[-•*]\s+|^\d+[.)]\s+", "", line).strip()
+            if not clean_line:
                 continue
 
-            lower = line.lower()
-
-            # Skip headings
-            headings = [
-                "primary and demographic factors:",
-                "medical history and associated conditions:",
-                "emerging risk factors:",
-                "other risk factors include:",
-                "additional risk factors include:",
-                "risk factors include:",
-                "risk factors for type 2 diabetes:",
-            ]
-            if any(lower.startswith(h) for h in headings):
+            # Generic heading and category lead-in detection:
+            # Any line ending with a colon functions as an introductory lead-in, not a factual assertion
+            if clean_line.endswith(":"):
                 continue
 
-            # Skip umbrella introductions and conversational preamble
-            preambles = [
-                "based on the provided context",
-                "based on the medical context",
-                "based on the context provided",
-                "based on the provided guidelines",
-                "according to the provided",
-                "according to the medical",
-                "the provided medical context",
-                "here are the risk factors",
-            ]
-            if any(lower.startswith(p) for p in preambles) or (lower.endswith(":") and len(lower.split()) < 10):
+            # Strip conversational preamble if present at start of line
+            clean_line = preamble_regex.sub("", clean_line).strip()
+            # If line had a secondary preamble (e.g. "Based on ..., here are the key factors:")
+            clean_line = preamble_regex.sub("", clean_line).strip()
+            if not clean_line or clean_line.endswith(":"):
                 continue
 
-            # Clean incomplete references
-            if "[medications]" in lower:
-                line = line.replace("[medications]", "medications")
+            if is_list_item:
+                # List items are already natural units
+                candidate_units.append(clean_line)
+            else:
+                # Prose paragraph: split into sentences conservatively
+                # Fixed-width lookbehind (?<=\.) splits at terminal period followed by whitespace and uppercase/digit
+                raw_sentences = [
+                    s.strip()
+                    for s in re.split(r"(?<=\.)\s+(?=[A-Z0-9])", clean_line)
+                    if s.strip()
+                ]
+                # Re-join sentences if split occurred on common abbreviations
+                abbrs = ("e.g.", "i.e.", "vs.", "dr.", "mr.", "mrs.", "ms.", "prof.", "fig.", "tab.", "no.", "vol.")
+                merged_sentences = []
+                for s in raw_sentences:
+                    if merged_sentences and merged_sentences[-1].lower().endswith(abbrs):
+                        merged_sentences[-1] = merged_sentences[-1] + " " + s
+                    else:
+                        merged_sentences.append(s)
 
-            # Skip obvious incomplete fragments
-            if lower.endswith("atypical"):
-                continue
+                for s in merged_sentences:
+                    if s:
+                        candidate_units.append(s)
 
-            claims.append(line)
+        # 3. Filter incomplete fragments, meta-disclaimers, and validate candidate claims
+        dangling_endings = re.compile(
+            r"\b(?:and|or|with|to|of|for|including|such as|cuts off)$",
+            re.IGNORECASE
+        )
 
-        # Deduplicate
-        unique_claims = []
+        valid_claims = []
         seen = set()
 
-        for claim in claims:
-            claim = re.sub(r"\s+", " ", claim).strip()
-            normalized = claim.lower()
-            if normalized not in seen:
-                seen.add(normalized)
-                unique_claims.append(claim)
+        for unit in candidate_units:
+            unit = re.sub(r"\s+", " ", unit).strip()
+            if not unit:
+                continue
 
-        return unique_claims
+            # Strip preamble if present on candidate unit / individual sentence
+            unit = preamble_regex.sub("", unit).strip()
+            unit = preamble_regex.sub("", unit).strip()
+            if not unit:
+                continue
+
+            # Remove trailing colon if leftover from an inline label
+            unit = re.sub(r":$", "", unit).strip()
+
+            # Capitalize first character if it became lowercase after stripping preamble
+            if unit and unit[0].islower():
+                unit = unit[0].upper() + unit[1:]
+
+            lower = unit.lower()
+
+            # Skip conversational refusal/disclaimer lines that contain no medical assertions
+            if lower.startswith("i am an ai") or lower.startswith("the context does not provide"):
+                continue
+
+            # Reject incomplete fragments:
+            # - Fewer than 2 words or fewer than 8 characters (single words like 'Atypical' are not claims)
+            # - Ends with dangling prepositions/conjunctions
+            tokens = unit.split()
+            if len(tokens) < 2 or len(unit) < 8:
+                continue
+            if dangling_endings.search(lower):
+                continue
+
+            normalized_key = lower
+            if normalized_key not in seen:
+                seen.add(normalized_key)
+                valid_claims.append(unit)
+
+        return valid_claims
 
     # ─── Claim-to-Hypothesis Mapping ─────────────────────────────
 
     @staticmethod
-    def claim_to_hypothesis(claim: str) -> str:
+    def _legacy_claim_to_hypothesis(claim: str) -> str:
         """
-        Map medical claims to NLI-friendly hypothesis sentences.
-        Preserves diabetes-specific mappings while handling natural clinical phrasing.
+        Legacy diabetes-specific template mapping (Notebook 08 Cell 22).
+        Retained strictly for regression comparison when USE_LEGACY_CLAIM_TEMPLATES=True.
         """
         claim = re.sub(r"\s+", " ", claim).strip()
         claim = re.sub(r"\[[^\]]*\]", "", claim).strip()
@@ -340,28 +387,66 @@ class VerificationService:
                 "is an emerging risk factor for type 2 diabetes."
             )
 
-        # Incomplete claim
         if "atypical medications" in lower:
             return claim
 
         return claim
 
+    @staticmethod
+    def claim_to_hypothesis(claim: str) -> str:
+        """
+        Map a medical claim to a normalized NLI hypothesis statement.
+        Preserves the actual extracted claim's meaning, negation, numbers, units,
+        populations, and qualifiers without hand-written template substitution.
+        """
+        if not claim or not isinstance(claim, str):
+            return ""
+
+        # Check explicit configuration flag for legacy template behavior
+        if getattr(settings, "USE_LEGACY_CLAIM_TEMPLATES", False):
+            return VerificationService._legacy_claim_to_hypothesis(claim)
+
+        # 1. Clean bracketed citations and empty/reference brackets (e.g. [Page 5], [p. 12], [1], [])
+        norm = re.sub(r"\[[^\]]*\]", "", claim).strip()
+
+        # 2. Clean markdown emphasis markers without stripping content
+        norm = re.sub(r"\*\*([^*]+)\*\*", r"\1", norm)
+        norm = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", norm)
+        norm = re.sub(r"__([^_]+)__", r"\1", norm)
+        norm = re.sub(r"`([^`]+)`", r"\1", norm)
+
+        # 3. Clean leading bullet markers or numbering if still present
+        norm = re.sub(r"^[-•*]\s+|^\d+[.)]\s+", "", norm).strip()
+
+        # 4. Collapse whitespace
+        norm = re.sub(r"\s+", " ", norm).strip()
+
+        # Reject empty or purely punctuation inputs
+        if not norm or not re.search(r"\w", norm):
+            return ""
+
+        # 5. Ensure declarative terminal punctuation for NLI cross-encoder
+        if not norm.endswith((".", "!", "?")):
+            norm = norm + "."
+
+        return norm
+
 
     # ─── Claim Support Decision ──────────────────────────────────
 
     @staticmethod
-    def is_claim_supported(evidence: dict) -> bool:
+    def is_claim_supported(evidence: Optional[dict]) -> bool:
         """
         Determine if a claim is supported by evidence.
         Ported from Notebook 08 Cell 25.
         """
-        if evidence is None:
+        if not evidence:
             return False
 
-        entailment = evidence["entailment"]
-        contradiction = evidence["contradiction"]
-        similarity = evidence["similarity"]
-        evidence_score = evidence["evidence_score"]
+        entailment = float(evidence.get("entailment", 0.0))
+        contradiction = float(evidence.get("contradiction", 0.0))
+        similarity = float(evidence.get("similarity", 0.0))
+        evidence_score = float(evidence.get("evidence_score", 0.0))
 
         # Strong direct evidence
         if (
@@ -382,6 +467,43 @@ class VerificationService:
 
         return False
 
+    @staticmethod
+    def classify_claim_status(evidence: Union[dict, List[dict], None]) -> str:
+        """
+        Consolidated 3-way claim classification decision rule shared between
+        production and evaluation:
+          - "CONTRADICTED": strong NLI contradiction signal
+          - "SUPPORTED": meets evidence score, entailment, and similarity thresholds
+          - "UNSUPPORTED": missing, irrelevant, or insufficient evidence
+        """
+        if evidence is None:
+            return "UNSUPPORTED"
+
+        if isinstance(evidence, list):
+            if not evidence:
+                return "UNSUPPORTED"
+            # If any candidate chunk shows strong contradiction, flag CONTRADICTED
+            for ev in evidence:
+                if VerificationService.classify_claim_status(ev) == "CONTRADICTED":
+                    return "CONTRADICTED"
+            # If any candidate chunk provides verified support, flag SUPPORTED
+            for ev in evidence:
+                if VerificationService.classify_claim_status(ev) == "SUPPORTED":
+                    return "SUPPORTED"
+            return "UNSUPPORTED"
+
+        contra = float(evidence.get("contradiction", 0.0))
+        ent = float(evidence.get("entailment", 0.0))
+
+        # Contradiction threshold
+        if contra >= 0.40 or (contra > ent and contra >= 0.25):
+            return "CONTRADICTED"
+
+        if VerificationService.is_claim_supported(evidence):
+            return "SUPPORTED"
+
+        return "UNSUPPORTED"
+
     # ─── Claim-Level Verification (batched) ──────────────────────
 
     def verify_claims(
@@ -395,18 +517,13 @@ class VerificationService:
         batch_size: int = 16
     ) -> dict:
         """
-        Batched claim-level verification.
-        Ported from Notebook 08 verify_claims_fast().
+        Batched claim-level verification using generic hypotheses and retrieved evidence.
         """
         self._ensure_loaded()
 
         # 1. Extract claims
         all_claims = self.extract_claims(answer)
-        claims = [
-            c for c in all_claims
-            if "context cuts off" not in c.lower()
-            and not c.lower().endswith("atypical")
-        ]
+        claims = [c for c in all_claims if c and c.strip()]
 
         if not claims:
             return {
@@ -419,12 +536,33 @@ class VerificationService:
         # 2. Map to hypotheses
         hypotheses = [self.claim_to_hypothesis(c) for c in claims]
 
+        # Filter valid non-empty hypotheses
+        valid_indices = [i for i, h in enumerate(hypotheses) if h and h.strip()]
+        if not valid_indices:
+            return {
+                "claims": [
+                    {
+                        "claim_number": i + 1,
+                        "claim": claim,
+                        "hypothesis": hypotheses[i],
+                        "supported": False,
+                        "evidence": None,
+                    }
+                    for i, claim in enumerate(claims)
+                ],
+                "supported_claims": 0,
+                "total_claims": len(claims),
+                "consistency_score": 0.0,
+            }
+
+        valid_hypotheses = [hypotheses[i] for i in valid_indices]
+
         # 3. Encode hypotheses
         hypothesis_embeddings = embedding_model.encode(
-            hypotheses, normalize_embeddings=True
+            valid_hypotheses, normalize_embeddings=True
         )
         raw_query_embeddings = embedding_model.encode(
-            hypotheses
+            valid_hypotheses
         ).astype("float32")
 
         # 4. Retrieve evidence candidates
@@ -440,9 +578,9 @@ class VerificationService:
         nli_hypotheses = []
         metadata = []
 
-        for claim_idx in range(len(claims)):
+        for v_pos, claim_idx in enumerate(valid_indices):
             claim_candidates = []
-            for rank, chunk_idx in enumerate(indices_arr[claim_idx]):
+            for rank, chunk_idx in enumerate(indices_arr[v_pos]):
                 chunk_idx = int(chunk_idx)
                 if chunk_idx < 0 or chunk_idx >= len(chunks):
                     continue
@@ -457,7 +595,7 @@ class VerificationService:
 
             # Backfill if all candidates were bibliography references
             if not claim_candidates:
-                for rank, chunk_idx in enumerate(indices_arr[claim_idx][:top_n]):
+                for rank, chunk_idx in enumerate(indices_arr[v_pos][:top_n]):
                     chunk_idx = int(chunk_idx)
                     if 0 <= chunk_idx < len(chunks):
                         claim_candidates.append((rank, chunk_idx, chunks[chunk_idx]))
@@ -465,11 +603,11 @@ class VerificationService:
             for rank, chunk_idx, chunk in claim_candidates:
                 similarity = float(np.dot(
                     normalized_embeddings[chunk_idx],
-                    hypothesis_embeddings[claim_idx]
+                    hypothesis_embeddings[v_pos]
                 ))
 
                 premises.append(chunk["text"])
-                nli_hypotheses.append(hypotheses[claim_idx])
+                nli_hypotheses.append(valid_hypotheses[v_pos])
                 metadata.append({
                     "claim_idx": claim_idx,
                     "rank": rank + 1,
@@ -477,17 +615,18 @@ class VerificationService:
                     "similarity": similarity,
                 })
 
-
         # 7. Batched NLI
-        nli_results = self.nli_score_batch(
-            premises, nli_hypotheses, batch_size=batch_size
-        )
+        if premises:
+            nli_results = self.nli_score_batch(
+                premises, nli_hypotheses, batch_size=batch_size
+            )
+        else:
+            nli_results = []
 
         # 8. Select strongest evidence per claim
         best_evidence = [None] * len(claims)
 
         for meta, nli in zip(metadata, nli_results):
-            # NLI-first scoring (NB08 Cell 26)
             evidence_score = (
                 0.70 * nli["entailment"]
                 + 0.30 * meta["similarity"]
@@ -516,8 +655,8 @@ class VerificationService:
         results = []
         supported_count = 0
 
-        for i, (claim, evidence) in enumerate(
-            zip(claims, best_evidence), start=1
+        for i, (claim, hypothesis, evidence) in enumerate(
+            zip(claims, hypotheses, best_evidence), start=1
         ):
             supported = self.is_claim_supported(evidence)
             if supported:
@@ -526,8 +665,9 @@ class VerificationService:
             results.append({
                 "claim_number": i,
                 "claim": claim,
-                "hypothesis": self.claim_to_hypothesis(claim),
+                "hypothesis": hypothesis,
                 "supported": supported,
+                "status": self.classify_claim_status(evidence),
                 "evidence": evidence,
             })
 

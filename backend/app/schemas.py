@@ -36,6 +36,7 @@ class ClaimResult(BaseModel):
     claim: str
     hypothesis: str
     supported: bool
+    status: Optional[str] = None
     evidence: Optional[ClaimEvidence] = None
 
 
@@ -117,10 +118,19 @@ class MetricSummarySchema(BaseModel):
     specificity: Optional[float] = None
 
 
+class CitationAlignmentSummarySchema(BaseModel):
+    total_cited_items: int
+    matched: int
+    adjacent: int
+    mismatched: int
+    alignment_rate: float
+
+
 class EvaluationItemResultSchema(BaseModel):
     id: str
     claim: str
     hypothesis: str
+    legacy_hypothesis: Optional[str] = None
     ground_truth: str
     predicted: str
     is_correct: bool
@@ -129,8 +139,35 @@ class EvaluationItemResultSchema(BaseModel):
     similarity: float
     evidence_score: float
     citation_page: Optional[int] = None
+    booklet_page: Optional[int] = None
+    verification_status: Optional[str] = "VERIFIED"
+    citation_alignment: Optional[str] = "NOT_APPLICABLE"
     matched_chunk_id: Optional[str] = None
+    matched_page: Optional[int] = None
     matched_text: Optional[str] = None
+
+
+class BaselineComparisonRowSchema(BaseModel):
+    system: str
+    accuracy: float
+    macro_precision: float
+    macro_recall: float
+    macro_f1: float
+    supported_f1: float
+    contradiction_capable: bool
+    notes: str
+
+
+class BaselineComparisonSummarySchema(BaseModel):
+    comparison_table: List[BaselineComparisonRowSchema]
+    accuracy_gain: float
+    f1_gain: float
+
+
+class ExportReportResponseSchema(BaseModel):
+    content: str
+    filename: str
+    format: str
 
 
 class EvaluationReportSchema(BaseModel):
@@ -143,6 +180,8 @@ class EvaluationReportSchema(BaseModel):
     per_class: Dict[str, Any]
     confusion_matrix: ConfusionMatrixSchema
     results: List[EvaluationItemResultSchema]
+    citation_summary: Optional[CitationAlignmentSummarySchema] = None
+    baseline_comparison: Optional[BaselineComparisonSummarySchema] = None
     provenance: Dict[str, Any]
 
 

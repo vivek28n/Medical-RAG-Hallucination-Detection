@@ -41,6 +41,7 @@ from app.schemas import (
     StageTrace,
     PipelineTrace,
     EvaluationReportSchema,
+    ExportReportResponseSchema,
     KnowledgeBaseOverviewSchema,
     ChunkListResponseSchema,
 )
@@ -457,10 +458,10 @@ def get_evaluation_benchmark():
 
 
 @app.post("/api/evaluation/run", response_model=EvaluationReportSchema)
-def run_evaluation():
+def run_evaluation(use_legacy_hypothesis: bool = False):
     """
     Execute benchmark evaluation suite against FAISS index and DeBERTa NLI verifier.
-    Computes precision, recall, F1, and confusion matrix.
+    Computes precision, recall, F1, confusion matrix, and baseline comparisons.
     """
     if not retrieval_service.index or not retrieval_service.embedding_model:
         raise HTTPException(
@@ -475,11 +476,85 @@ def run_evaluation():
 
     try:
         from app.evaluation.runner import run_benchmark_evaluation
-        report = run_benchmark_evaluation(retrieval_service, verification_service)
+        from app.evaluation.baselines import evaluate_retrieval_only_baseline, compare_baselines
+        report = run_benchmark_evaluation(
+            retrieval_service,
+            verification_service,
+            use_legacy_hypothesis=use_legacy_hypothesis
+        )
+        retrieval_base = evaluate_retrieval_only_baseline(retrieval_service)
+        comp = compare_baselines(report, retrieval_base)
+        report["baseline_comparison"] = comp
         return report
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Evaluation execution failed: {str(e)}")
+
+
+@app.post("/api/evaluation/export/markdown", response_model=ExportReportResponseSchema)
+def export_evaluation_markdown(use_legacy_hypothesis: bool = False):
+    """
+    Generate and return a structured GitHub-flavored Markdown evaluation report.
+    """
+    if not retrieval_service.index or not retrieval_service.embedding_model or not verification_service.nli_model:
+        raise HTTPException(status_code=503, detail="Retrieval index or NLI model is not ready.")
+    try:
+        from app.evaluation.runner import run_benchmark_evaluation
+        from app.evaluation.baselines import evaluate_retrieval_only_baseline, compare_baselines
+        from app.evaluation.export import export_report_to_markdown
+
+        report = run_benchmark_evaluation(
+            retrieval_service,
+            verification_service,
+            use_legacy_hypothesis=use_legacy_hypothesis
+        )
+        retrieval_base = evaluate_retrieval_only_baseline(retrieval_service)
+        comp = compare_baselines(report, retrieval_base)
+        report["baseline_comparison"] = comp
+
+        content = export_report_to_markdown(report, baseline_comparison=comp)
+        ts_slug = report["timestamp"].replace(":", "-").replace(".", "-")
+        return {
+            "content": content,
+            "filename": f"medguide_evaluation_report_{ts_slug}.md",
+            "format": "markdown",
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Markdown export failed: {str(e)}")
+
+
+@app.post("/api/evaluation/export/json", response_model=ExportReportResponseSchema)
+def export_evaluation_json(use_legacy_hypothesis: bool = False):
+    """
+    Generate and return a structured serialized JSON evaluation report.
+    """
+    if not retrieval_service.index or not retrieval_service.embedding_model or not verification_service.nli_model:
+        raise HTTPException(status_code=503, detail="Retrieval index or NLI model is not ready.")
+    try:
+        from app.evaluation.runner import run_benchmark_evaluation
+        from app.evaluation.baselines import evaluate_retrieval_only_baseline, compare_baselines
+        from app.evaluation.export import export_report_to_json
+
+        report = run_benchmark_evaluation(
+            retrieval_service,
+            verification_service,
+            use_legacy_hypothesis=use_legacy_hypothesis
+        )
+        retrieval_base = evaluate_retrieval_only_baseline(retrieval_service)
+        comp = compare_baselines(report, retrieval_base)
+        report["baseline_comparison"] = comp
+
+        content = export_report_to_json(report, baseline_comparison=comp)
+        ts_slug = report["timestamp"].replace(":", "-").replace(".", "-")
+        return {
+            "content": content,
+            "filename": f"medguide_evaluation_report_{ts_slug}.json",
+            "format": "json",
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"JSON export failed: {str(e)}")
 
 
 # ─── Knowledge Base Explorer Endpoints ───────────────────────────
