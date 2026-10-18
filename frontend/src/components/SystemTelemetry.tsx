@@ -1,13 +1,13 @@
 import { ShieldCheck, Cpu, Database, Network, BookOpen, Activity } from 'lucide-react';
 
 interface SystemTelemetryProps {
-  isReady?: boolean;
+  isReady?: boolean | null;
   totalVectors?: number;
   activeModel?: string;
 }
 
 export const SystemTelemetry = ({
-  isReady = true,
+  isReady = null,
   totalVectors = 268,
   activeModel = 'Gemini 3 Flash Preview',
 }: SystemTelemetryProps) => {
@@ -18,10 +18,12 @@ export const SystemTelemetry = ({
           <Activity className="icon-pulse neon-emerald" size={18} />
           <span>CLINICAL EVIDENCE TELEMETRY</span>
         </div>
-        <span className={`status-pill ${isReady ? 'ready' : 'degraded'}`}>
-          <span className="status-dot"></span>
-          {isReady ? 'SYSTEM ONLINE' : 'DEGRADED'}
-        </span>
+        {isReady !== null && (
+          <span className={`status-pill ${isReady ? 'ready' : 'degraded'}`}>
+            <span className="status-dot"></span>
+            {isReady ? 'BACKEND VERIFIED' : 'BACKEND DEGRADED'}
+          </span>
+        )}
       </div>
 
       <div className="telemetry-grid">

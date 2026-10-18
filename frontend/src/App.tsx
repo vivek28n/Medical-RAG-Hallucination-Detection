@@ -13,8 +13,11 @@ import { Capabilities } from './components/Capabilities';
 import { HowItWorks } from './components/HowItWorks';
 import { GuidelinesSection } from './components/GuidelinesSection';
 import { AboutSection } from './components/AboutSection';
-import { HolographicHeart } from './components/HolographicHeart';
+import { HolographicHeart, type HeartStatus } from './components/HolographicHeart';
 import { SystemTelemetry } from './components/SystemTelemetry';
+import { PipelineInspector } from './components/PipelineInspector';
+import { EvaluationLab } from './components/EvaluationLab';
+import { KnowledgeBaseExplorer } from './components/KnowledgeBaseExplorer';
 import { askMedicalQuestion, checkSystemHealth, ApiError } from './services/api';
 import type { AskResponse, Source } from './types/api';
 import { RotateCcw, Sparkles } from 'lucide-react';
@@ -26,9 +29,12 @@ function App() {
   const [query, setQuery] = useState('');
   const [response, setResponse] = useState<AskResponse | null>(null);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
+  const [activeChunkId, setActiveChunkId] = useState<string | null>(null);
   const [loadingStep, setLoadingStep] = useState('Reviewing medical evidence…');
   const [errorMessage, setErrorMessage] = useState<string | undefined>();
-  const [isSystemReady, setIsSystemReady] = useState(true);
+  const [isSystemReady, setIsSystemReady] = useState<boolean | null>(null);
+  const [showEvaluationLab, setShowEvaluationLab] = useState(false);
+  const [showKnowledgeBase, setShowKnowledgeBase] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const suggestions = [
@@ -100,6 +106,30 @@ function App() {
     }
   };
 
+  const handleSelectChunk = (chunkId: string) => {
+    setActiveChunkId(chunkId);
+    setTimeout(() => {
+      const el = document.getElementById(`source-chunk-${chunkId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 50);
+  };
+
+  const handleJumpToClaim = (claimNumber: number) => {
+    setTimeout(() => {
+      const el = document.getElementById(`claim-row-${claimNumber}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 50);
+  };
+
+  const handleInspectEvidence = (source: Source) => {
+    setSelectedSource(source);
+    setActiveChunkId(source.chunk_id);
+  };
+
   const resetToLanding = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -108,6 +138,8 @@ function App() {
     setAppState('landing');
     setQuery('');
     setResponse(null);
+    setSelectedSource(null);
+    setActiveChunkId(null);
     setErrorMessage(undefined);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -121,6 +153,8 @@ function App() {
       setAppState('landing');
       setQuery('');
       setResponse(null);
+      setSelectedSource(null);
+      setActiveChunkId(null);
       setErrorMessage(undefined);
       setTimeout(() => {
         if (targetId === 'top') {
@@ -138,14 +172,20 @@ function App() {
     }
   };
 
-  // Determine heart visual status
-  const heartStatus =
+  // Determine heart visual status mapped to authentic pipeline states
+  const heartStatus: HeartStatus =
     appState === 'loading'
       ? 'loading'
+      : appState === 'error'
+      ? 'error'
+      : appState === 'result' && response?.hallucination_decision?.decision === 'CONTRADICTED'
+      ? 'contradicted'
+      : appState === 'result' &&
+        (response?.hallucination_decision?.decision === 'POTENTIAL HALLUCINATION' ||
+         response?.self_correction?.correction_applied)
+      ? 'warning'
       : appState === 'result' && response?.hallucination_decision?.decision === 'SUPPORTED'
       ? 'verified'
-      : appState === 'result' && response?.hallucination_decision?.decision === 'POTENTIAL HALLUCINATION'
-      ? 'warning'
       : 'idle';
 
   return (
@@ -153,7 +193,11 @@ function App() {
       {/* Background Cybernetic ECG & Particle Grids */}
       <div className="ecg-ambient-grid" />
 
-      <Header onNavClick={handleNavClick} isReady={isSystemReady} />
+      <Header
+        onNavClick={handleNavClick}
+        onOpenEvaluationLab={() => setShowEvaluationLab(true)}
+        onOpenKnowledgeBase={() => setShowKnowledgeBase(true)}
+      />
 
       <main className="dashboard-container" id="top">
         {/* Top Inquiry Console (Search + Suggestion Chips) */}
@@ -193,7 +237,7 @@ function App() {
               <div className="landing-content-stack">
                 <Capabilities />
                 <HowItWorks />
-                <GuidelinesSection />
+                <GuidelinesSection onOpenKnowledgeBase={() => setShowKnowledgeBase(true)} />
                 <AboutSection />
               </div>
             )}
@@ -228,11 +272,21 @@ function App() {
                   isCorrected={response.self_correction?.correction_applied}
                 />
 
-                <ClaimVerification claims={response.claim_verification?.claims || []} />
+                <PipelineInspector trace={response.pipeline_trace} />
+
+                <ClaimVerification
+                  claims={response.claim_verification?.claims || []}
+                  activeChunkId={activeChunkId}
+                  onSelectChunk={handleSelectChunk}
+                  onInspectEvidence={handleInspectEvidence}
+                />
 
                 <SourceList
                   sources={response.sources || []}
-                  onViewEvidence={(source) => setSelectedSource(source)}
+                  claims={response.claim_verification?.claims || []}
+                  activeChunkId={activeChunkId}
+                  onViewEvidence={handleInspectEvidence}
+                  onJumpToClaim={handleJumpToClaim}
                 />
               </div>
             )}
@@ -250,7 +304,12 @@ function App() {
                 <span className="core-subtext">Interactive WebGL Wireframe</span>
               </div>
 
-              <HolographicHeart status={heartStatus} />
+              <HolographicHeart
+                status={heartStatus}
+                latencyMs={response?.pipeline_trace?.total_duration_ms}
+                confidenceLevel={response?.confidence?.confidence_level}
+                isCorrected={response?.self_correction?.correction_applied}
+              />
             </div>
 
             {/* When viewing results: Display Verification HUD & Confidence Signals */}
@@ -282,6 +341,8 @@ function App() {
             <a href="#guidelines" onClick={(e) => { e.preventDefault(); handleNavClick('guidelines'); }}>Guidelines</a>
             <a href="#how-it-works" onClick={(e) => { e.preventDefault(); handleNavClick('how-it-works'); }}>How it works</a>
             <a href="#about" onClick={(e) => { e.preventDefault(); handleNavClick('about'); }}>About</a>
+            <a href="#knowledge-base" onClick={(e) => { e.preventDefault(); setShowKnowledgeBase(true); }}>Knowledge Base</a>
+            <a href="#evaluation" onClick={(e) => { e.preventDefault(); setShowEvaluationLab(true); }}>Evaluation Lab</a>
           </div>
           <div className="footer-meta-links">
             <span className="footer-disclaimer">For clinical research &amp; educational verification. Not medical advice.</span>
@@ -290,7 +351,22 @@ function App() {
         </div>
       </footer>
 
-      <EvidenceDrawer source={selectedSource} onClose={() => setSelectedSource(null)} />
+      <EvidenceDrawer
+        source={selectedSource}
+        claims={response?.claim_verification?.claims || []}
+        onClose={() => setSelectedSource(null)}
+        onJumpToClaim={handleJumpToClaim}
+      />
+
+      <EvaluationLab
+        isOpen={showEvaluationLab}
+        onClose={() => setShowEvaluationLab(false)}
+      />
+
+      <KnowledgeBaseExplorer
+        isOpen={showKnowledgeBase}
+        onClose={() => setShowKnowledgeBase(false)}
+      />
     </div>
   );
 }

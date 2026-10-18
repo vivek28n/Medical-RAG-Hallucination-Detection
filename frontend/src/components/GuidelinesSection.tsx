@@ -1,9 +1,21 @@
 import { useState } from 'react';
 import { FileText } from 'lucide-react';
-import { DocumentDetailsModal } from './DocumentDetailsModal';
+import { KnowledgeBaseExplorer } from './KnowledgeBaseExplorer';
 
-export const GuidelinesSection = () => {
+interface GuidelinesSectionProps {
+  onOpenKnowledgeBase?: () => void;
+}
+
+export const GuidelinesSection: React.FC<GuidelinesSectionProps> = ({ onOpenKnowledgeBase }) => {
   const [modalOpen, setModalOpen] = useState(false);
+
+  const handleOpen = () => {
+    if (onOpenKnowledgeBase) {
+      onOpenKnowledgeBase();
+    } else {
+      setModalOpen(true);
+    }
+  };
 
   return (
     <section id="guidelines" className="guidelines-section">
@@ -22,12 +34,14 @@ export const GuidelinesSection = () => {
               <li>Indexed for retrieval</li>
               <li>FAISS-backed search</li>
             </ul>
-            <button className="doc-details-btn" onClick={() => setModalOpen(true)}>
+            <button className="doc-details-btn" onClick={handleOpen}>
               View document details
             </button>
           </div>
         </div>
-        <DocumentDetailsModal isOpen={modalOpen} onClose={() => setModalOpen(false)} />
+        {!onOpenKnowledgeBase && (
+          <KnowledgeBaseExplorer isOpen={modalOpen} onClose={() => setModalOpen(false)} />
+        )}
       </div>
     </section>
   );

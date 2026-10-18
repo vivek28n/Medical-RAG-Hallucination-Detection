@@ -1,12 +1,12 @@
 export interface Source {
   chunk_id: string;
-  page: number;
+  page?: number | null;
   text: string;
 }
 
 export interface ClaimEvidence {
   chunk_id: string;
-  page: number;
+  page?: number | null;
   text: string;
   similarity: number;
   entailment: number;
@@ -53,6 +53,19 @@ export interface SelfCorrection {
   corrected_answer?: string;
 }
 
+export interface StageTrace {
+  stage_name: string;
+  duration_ms: number;
+  status: 'completed' | 'skipped' | 'failed';
+  details?: Record<string, unknown>;
+}
+
+export interface PipelineTrace {
+  total_duration_ms: number;
+  stages: StageTrace[];
+  timestamp: string;
+}
+
 export interface AskResponse {
   answer: string;
   sources: Source[];
@@ -60,4 +73,137 @@ export interface AskResponse {
   confidence: Confidence;
   hallucination_decision: HallucinationDecision;
   self_correction: SelfCorrection;
+  pipeline_trace?: PipelineTrace;
+}
+
+// ─── Evaluation Lab Types ───────────────────────────────────────
+
+export interface BenchmarkItem {
+  id: string;
+  claim: string;
+  hypothesis?: string;
+  ground_truth: 'SUPPORTED' | 'CONTRADICTED' | 'UNSUPPORTED';
+  principle?: string;
+  citation_page?: number | null;
+  rationale?: string;
+}
+
+export interface ConfusionMatrix {
+  labels: string[];
+  matrix: number[][];
+  total: number;
+}
+
+export interface MetricSummary {
+  precision: number;
+  recall: number;
+  f1_score: number;
+  specificity?: number;
+}
+
+export interface EvaluationItemResult {
+  id: string;
+  claim: string;
+  hypothesis: string;
+  ground_truth: 'SUPPORTED' | 'CONTRADICTED' | 'UNSUPPORTED';
+  predicted: 'SUPPORTED' | 'CONTRADICTED' | 'UNSUPPORTED';
+  is_correct: boolean;
+  entailment: number;
+  contradiction: number;
+  similarity: number;
+  evidence_score: number;
+  citation_page?: number | null;
+  matched_chunk_id?: string | null;
+  matched_text?: string | null;
+}
+
+export interface BenchmarkProvenance {
+  source_document: string;
+  publisher: string;
+  document_pages: number;
+  vector_chunks: number;
+  label_definitions: Record<string, string>;
+  limitations: string[];
+  reproduction_instructions: string;
+}
+
+export interface EvaluationReport {
+  timestamp: string;
+  total_items: number;
+  duration_ms: number;
+  accuracy: number;
+  macro_metrics: MetricSummary;
+  binary_metrics: MetricSummary;
+  per_class: Record<string, { precision: number; recall: number; f1_score: number; support: number }>;
+  confusion_matrix: ConfusionMatrix;
+  results: EvaluationItemResult[];
+  provenance: BenchmarkProvenance;
+}
+
+export interface DocumentMeta {
+  filename: string;
+  title: string;
+  publisher?: string | null;
+  source_path: string;
+  file_exists: boolean;
+  file_size_bytes?: number | null;
+  last_modified?: string | null;
+  total_pages?: number | null;
+}
+
+export interface IndexMeta {
+  index_type?: string | null;
+  metric?: string | null;
+  dimension?: number | null;
+  total_vectors: number;
+  is_trained: boolean;
+  index_file_exists: boolean;
+  index_file_size_bytes?: number | null;
+  embeddings_file_exists: boolean;
+  embeddings_file_size_bytes?: number | null;
+  embeddings_shape?: number[] | null;
+}
+
+export interface ChunkingConfig {
+  chunk_size: number;
+  chunk_overlap: number;
+  splitter_type: string;
+  embedding_model: string;
+}
+
+export interface CorpusStats {
+  total_chunks: number;
+  avg_chunk_length?: number | null;
+  min_chunk_length?: number | null;
+  max_chunk_length?: number | null;
+  clinical_chunks_count: number;
+  reference_chunks_count: number;
+  pages_with_chunks: number;
+  missing_page_metadata_chunks: number;
+}
+
+export interface KnowledgeBaseOverview {
+  document: DocumentMeta;
+  index: IndexMeta;
+  chunking: ChunkingConfig;
+  corpus_statistics: CorpusStats;
+  is_ready: boolean;
+  timestamp: string;
+}
+
+export interface ChunkItem {
+  chunk_id: string;
+  page?: number | null;
+  page_available: boolean;
+  char_length: number;
+  is_reference: boolean;
+  text: string;
+  preview: string;
+}
+
+export interface ChunkListResponse {
+  total_matching: number;
+  offset: number;
+  limit: number;
+  chunks: ChunkItem[];
 }

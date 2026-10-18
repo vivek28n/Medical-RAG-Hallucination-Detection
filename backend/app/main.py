@@ -8,7 +8,9 @@ Wires the complete Notebook 08 pipeline:
 
 import os
 import sys
+import time
 import traceback
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 # Prevent Hugging Face tokenizers deadlock and tune PyTorch CPU threads
@@ -16,7 +18,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import torch
 torch.set_num_threads(min(4, os.cpu_count() or 1))
 
-from fastapi import FastAPI, HTTPException, Response
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 # Ensure backend root is in sys.path
@@ -35,6 +38,11 @@ from app.schemas import (
     ConfidenceResult,
     HallucinationDecision,
     SelfCorrectionResult,
+    StageTrace,
+    PipelineTrace,
+    EvaluationReportSchema,
+    KnowledgeBaseOverviewSchema,
+    ChunkListResponseSchema,
 )
 from app.services.retrieval import retrieval_service
 from app.services.llm import llm_service
@@ -132,29 +140,45 @@ def ask_question(request: AskRequest):
         )
 
     try:
+        pipeline_start = time.perf_counter()
+        stages = []
         query = request.query
         print(f"\n{'='*70}", flush=True)
         print(f"Query: {query}", flush=True)
 
         # ── 1. RETRIEVAL ─────────────────────────────────────────
         print("[1/7] Retrieving evidence...", flush=True)
+        t_stage = time.perf_counter()
         raw_results = retrieval_service.search(
             query, top_k=settings.RETRIEVAL_TOP_K
         )
+        t_retrieval = round((time.perf_counter() - t_stage) * 1000, 2)
+        stages.append(StageTrace(
+            stage_name="retrieval",
+            duration_ms=t_retrieval,
+            status="completed",
+            details={
+                "chunks_retrieved": len(raw_results),
+                "top_k": settings.RETRIEVAL_TOP_K,
+                "embedding_model": settings.EMBEDDING_MODEL_NAME,
+            }
+        ))
 
         # Build context string (NB08 build_context style)
         context = ""
         sources = []
         for i, res in enumerate(raw_results, 1):
+            page_val = res.get("page")
+            page_label = f"Page: {page_val}" if page_val is not None else "Page: N/A"
             context += (
                 f"\n[Source: NIDDK Guiding Principles | "
-                f"Page: {res['page']} | "
+                f"{page_label} | "
                 f"Chunk: {res['chunk_id']}]\n"
                 f"{res['text']}\n"
             )
             sources.append(SourceEvidence(
                 chunk_id=res["chunk_id"],
-                page=res["page"],
+                page=page_val,
                 text=res["text"],
             ))
 
@@ -162,11 +186,24 @@ def ask_question(request: AskRequest):
 
         # ── 2. GROUNDED GENERATION ───────────────────────────────
         print("[2/7] Generating grounded answer...", flush=True)
+        t_stage = time.perf_counter()
         answer = llm_service.generate_grounded_answer(query, context)
+        t_gen = round((time.perf_counter() - t_stage) * 1000, 2)
+        stages.append(StageTrace(
+            stage_name="grounded_generation",
+            duration_ms=t_gen,
+            status="completed",
+            details={
+                "model": settings.GEMINI_MODEL_NAME,
+                "answer_characters": len(answer),
+                "context_characters": len(context),
+            }
+        ))
         print(f"  Answer length: {len(answer)}", flush=True)
 
         # ── 3. CLAIM VERIFICATION ────────────────────────────────
         print("[3/7] Verifying claims...", flush=True)
+        t_stage = time.perf_counter()
         claim_verification_raw = verification_service.verify_claims(
             answer=answer,
             chunks=retrieval_service.metadata,
@@ -176,6 +213,19 @@ def ask_question(request: AskRequest):
             top_n=settings.VERIFICATION_TOP_N,
             batch_size=settings.NLI_BATCH_SIZE,
         )
+        t_ver = round((time.perf_counter() - t_stage) * 1000, 2)
+        stages.append(StageTrace(
+            stage_name="claim_verification",
+            duration_ms=t_ver,
+            status="completed",
+            details={
+                "total_claims": claim_verification_raw["total_claims"],
+                "supported_claims": claim_verification_raw["supported_claims"],
+                "consistency_score": round(claim_verification_raw["consistency_score"], 4),
+                "nli_model": settings.NLI_MODEL_NAME,
+                "batch_size": settings.NLI_BATCH_SIZE,
+            }
+        ))
         print(
             f"  Claims: {claim_verification_raw['supported_claims']}"
             f"/{claim_verification_raw['total_claims']} supported",
@@ -184,6 +234,7 @@ def ask_question(request: AskRequest):
 
         # ── 4. CONFIDENCE SCORING ────────────────────────────────
         print("[4/7] Calculating confidence...", flush=True)
+        t_stage = time.perf_counter()
         confidence_raw = verification_service.calculate_confidence(
             answer=answer,
             question=query,
@@ -191,6 +242,20 @@ def ask_question(request: AskRequest):
             claim_verification=claim_verification_raw,
             embedding_model=retrieval_service.embedding_model,
         )
+        t_conf = round((time.perf_counter() - t_stage) * 1000, 2)
+        stages.append(StageTrace(
+            stage_name="confidence_scoring",
+            duration_ms=t_conf,
+            status="completed",
+            details={
+                "confidence_score": round(confidence_raw["confidence_score"], 4),
+                "confidence_level": confidence_raw["confidence_level"],
+                "semantic_similarity": round(confidence_raw["semantic_similarity"], 4),
+                "nli_entailment": round(confidence_raw["nli_entailment"], 4),
+                "retrieval_quality": round(confidence_raw["retrieval_quality"], 4),
+                "claim_consistency": round(confidence_raw["claim_consistency"], 4),
+            }
+        ))
         print(
             f"  Confidence: {confidence_raw['confidence_score']:.4f} "
             f"({confidence_raw['confidence_level']})",
@@ -199,14 +264,26 @@ def ask_question(request: AskRequest):
 
         # ── 5. HALLUCINATION DECISION ────────────────────────────
         print("[5/7] Determining hallucination status...", flush=True)
+        t_stage = time.perf_counter()
         decision_raw = verification_service.determine_decision(
             claim_verification=claim_verification_raw,
             confidence_result=confidence_raw,
         )
+        t_dec = round((time.perf_counter() - t_stage) * 1000, 2)
+        stages.append(StageTrace(
+            stage_name="hallucination_decision",
+            duration_ms=t_dec,
+            status="completed",
+            details={
+                "decision": decision_raw["decision"],
+                "strong_contradictions": decision_raw["strong_contradictions"],
+            }
+        ))
         print(f"  Decision: {decision_raw['decision']}", flush=True)
 
         # ── 6. SELF-CORRECTION ───────────────────────────────────
         print("[6/7] Self-correction check...", flush=True)
+        t_stage = time.perf_counter()
         correction_raw = correction_service.perform_correction(
             question=query,
             answer=answer,
@@ -214,6 +291,28 @@ def ask_question(request: AskRequest):
             claim_verification=claim_verification_raw,
             llm_service=llm_service,
         )
+        t_corr = round((time.perf_counter() - t_stage) * 1000, 2)
+
+        correction_needed = correction_raw["correction_needed"]
+        correction_applied = correction_raw["correction_applied"]
+
+        corr_status = "completed" if correction_applied else ("failed" if correction_needed else "skipped")
+        corr_reason = (
+            "Evidence-grounded correction generated"
+            if correction_applied
+            else ("LLM unavailable for revision" if correction_needed else "Answer deemed reliable (no correction required)")
+        )
+
+        stages.append(StageTrace(
+            stage_name="self_correction",
+            duration_ms=t_corr,
+            status=corr_status,
+            details={
+                "correction_needed": correction_needed,
+                "correction_applied": correction_applied,
+                "reason": corr_reason,
+            }
+        ))
         print(
             f"  Needed: {correction_raw['correction_needed']} | "
             f"Applied: {correction_raw['correction_applied']}",
@@ -226,8 +325,9 @@ def ask_question(request: AskRequest):
         final_decision = decision_raw
 
         # ── 6.5 RE-VERIFICATION ──────────────────────────────────
-        if correction_raw["correction_applied"] and correction_raw.get("corrected_answer"):
+        if correction_applied and correction_raw.get("corrected_answer"):
             print("[6.5/7] Re-verifying corrected answer...", flush=True)
+            t_stage = time.perf_counter()
             final_answer = correction_raw["corrected_answer"]
 
             final_claim_verification = verification_service.verify_claims(
@@ -252,6 +352,24 @@ def ask_question(request: AskRequest):
                 claim_verification=final_claim_verification,
                 confidence_result=final_confidence,
             )
+            t_rever = round((time.perf_counter() - t_stage) * 1000, 2)
+            stages.append(StageTrace(
+                stage_name="re_verification",
+                duration_ms=t_rever,
+                status="completed",
+                details={
+                    "post_correction_supported": final_claim_verification["supported_claims"],
+                    "post_correction_confidence": round(final_confidence["confidence_score"], 4),
+                    "post_correction_decision": final_decision["decision"],
+                }
+            ))
+        else:
+            stages.append(StageTrace(
+                stage_name="re_verification",
+                duration_ms=0.0,
+                status="skipped",
+                details={"reason": "No self-correction applied"}
+            ))
 
         # ── 7. BUILD RESPONSE ────────────────────────────────────
         print("[7/7] Building response...", flush=True)
@@ -264,7 +382,7 @@ def ask_question(request: AskRequest):
             if ev:
                 claim_evidence = ClaimEvidence(
                     chunk_id=ev["chunk_id"],
-                    page=ev["page"],
+                    page=ev.get("page"),
                     text=ev["text"],
                     similarity=ev["similarity"],
                     entailment=ev["entailment"],
@@ -279,6 +397,13 @@ def ask_question(request: AskRequest):
                 supported=cr["supported"],
                 evidence=claim_evidence,
             ))
+
+        total_duration_ms = round((time.perf_counter() - pipeline_start) * 1000, 2)
+        pipeline_trace = PipelineTrace(
+            total_duration_ms=total_duration_ms,
+            stages=stages,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
 
         response = AskResponse(
             answer=final_answer,
@@ -297,10 +422,11 @@ def ask_question(request: AskRequest):
                 original_answer=correction_raw["original_answer"],
                 corrected_answer=correction_raw.get("corrected_answer"),
             ),
+            pipeline_trace=pipeline_trace,
         )
 
         print(f"{'='*70}", flush=True)
-        print("PIPELINE COMPLETE", flush=True)
+        print(f"PIPELINE COMPLETE in {total_duration_ms}ms", flush=True)
         print(f"{'='*70}\n", flush=True)
 
         return response
@@ -313,3 +439,93 @@ def ask_question(request: AskRequest):
         if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY in err_str:
             err_str = err_str.replace(settings.GEMINI_API_KEY, "[REDACTED]")
         raise HTTPException(status_code=500, detail=f"Inference error: {err_str}")
+
+
+# ─── Evaluation Lab Endpoints ────────────────────────────────────
+
+@app.get("/api/evaluation/benchmark")
+def get_evaluation_benchmark():
+    """
+    Return benchmark metadata, provenance, and labelled test probes.
+    """
+    from app.evaluation.benchmark_data import BENCHMARK_ITEMS, BENCHMARK_PROVENANCE
+    return {
+        "provenance": BENCHMARK_PROVENANCE,
+        "items": BENCHMARK_ITEMS,
+        "total_items": len(BENCHMARK_ITEMS),
+    }
+
+
+@app.post("/api/evaluation/run", response_model=EvaluationReportSchema)
+def run_evaluation():
+    """
+    Execute benchmark evaluation suite against FAISS index and DeBERTa NLI verifier.
+    Computes precision, recall, F1, and confusion matrix.
+    """
+    if not retrieval_service.index or not retrieval_service.embedding_model:
+        raise HTTPException(
+            status_code=503,
+            detail="Vector database index is not ready."
+        )
+    if not verification_service.nli_model:
+        raise HTTPException(
+            status_code=503,
+            detail="DeBERTa NLI model is not loaded."
+        )
+
+    try:
+        from app.evaluation.runner import run_benchmark_evaluation
+        report = run_benchmark_evaluation(retrieval_service, verification_service)
+        return report
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Evaluation execution failed: {str(e)}")
+
+
+# ─── Knowledge Base Explorer Endpoints ───────────────────────────
+
+@app.get("/api/knowledge-base/overview", response_model=KnowledgeBaseOverviewSchema)
+def get_knowledge_base_overview_endpoint():
+    """
+    Return genuine corpus, index, model, and document metadata
+    derived from loaded retrieval structures and files on disk.
+    """
+    try:
+        from app.knowledge_base.service import get_knowledge_base_overview
+        return get_knowledge_base_overview(retrieval_service)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate knowledge base overview: {str(e)}"
+        )
+
+
+@app.get("/api/knowledge-base/chunks", response_model=ChunkListResponseSchema)
+def get_knowledge_base_chunks_endpoint(
+    page: Optional[int] = Query(None, description="Filter by page number"),
+    search: Optional[str] = Query(None, description="Substring search term"),
+    chunk_type: Optional[str] = Query("all", description="Chunk type filter: all, clinical, reference"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    limit: int = Query(15, ge=1, le=100, description="Items per page"),
+):
+    """
+    Search and paginate indexed document chunks with previews and metadata.
+    Distinguishes unavailable page metadata from page numbers.
+    """
+    try:
+        from app.knowledge_base.service import get_knowledge_base_chunks
+        return get_knowledge_base_chunks(
+            retrieval_service,
+            page=page,
+            search=search,
+            chunk_type=chunk_type,
+            offset=offset,
+            limit=limit,
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve knowledge base chunks: {str(e)}"
+        )

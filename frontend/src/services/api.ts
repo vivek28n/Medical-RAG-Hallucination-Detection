@@ -78,3 +78,62 @@ export const askMedicalQuestion = async (
     throw new ApiError('Network error. MedGuide could not connect to the backend server (ensure port 8000 is active).');
   }
 };
+
+export interface BenchmarkResponse {
+  provenance: import('../types/api').BenchmarkProvenance;
+  items: import('../types/api').BenchmarkItem[];
+  total_items: number;
+}
+
+export const fetchBenchmark = async (): Promise<BenchmarkResponse> => {
+  const response = await fetch(`${API_BASE_URL}/api/evaluation/benchmark`);
+  if (!response.ok) {
+    throw new ApiError('Failed to fetch benchmark metadata');
+  }
+  return await response.json();
+};
+
+export const runEvaluationBenchmark = async (): Promise<import('../types/api').EvaluationReport> => {
+  const response = await fetch(`${API_BASE_URL}/api/evaluation/run`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new ApiError('Failed to run benchmark evaluation');
+  }
+  return await response.json();
+};
+
+export interface ChunkQueryParams {
+  page?: number;
+  search?: string;
+  chunk_type?: 'all' | 'clinical' | 'reference';
+  offset?: number;
+  limit?: number;
+}
+
+export const fetchKnowledgeBaseOverview = async (): Promise<import('../types/api').KnowledgeBaseOverview> => {
+  const response = await fetch(`${API_BASE_URL}/api/knowledge-base/overview`);
+  if (!response.ok) {
+    throw new ApiError('Failed to fetch knowledge base overview');
+  }
+  return await response.json();
+};
+
+export const fetchKnowledgeBaseChunks = async (
+  params: ChunkQueryParams = {}
+): Promise<import('../types/api').ChunkListResponse> => {
+  const query = new URLSearchParams();
+  if (params.page !== undefined && params.page !== null) query.set('page', String(params.page));
+  if (params.search) query.set('search', params.search);
+  if (params.chunk_type) query.set('chunk_type', params.chunk_type);
+  if (params.offset !== undefined) query.set('offset', String(params.offset));
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+
+  const qs = query.toString();
+  const url = `${API_BASE_URL}/api/knowledge-base/chunks${qs ? `?${qs}` : ''}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new ApiError('Failed to fetch knowledge base chunks');
+  }
+  return await response.json();
+};

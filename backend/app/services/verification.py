@@ -495,9 +495,9 @@ class VerificationService:
             )
 
             evidence = {
-                "chunk_id": meta["chunk"]["chunk_id"],
-                "page": meta["chunk"]["page"],
-                "text": meta["chunk"]["text"],
+                "chunk_id": meta["chunk"].get("chunk_id", "unknown_chunk"),
+                "page": meta["chunk"].get("page"),
+                "text": meta["chunk"].get("text", ""),
                 "similarity": meta["similarity"],
                 "entailment": nli["entailment"],
                 "contradiction": nli["contradiction"],
