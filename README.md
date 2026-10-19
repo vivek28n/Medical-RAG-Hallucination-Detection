@@ -528,17 +528,39 @@ This allows generated claims to be compared against specific medical evidence.
 
 ### 4. Interactive Evaluation Lab & Benchmark Suite
 * Built-in benchmark suite of verified medical test questions across supported, contradictory, and unsupported edge cases.
-* Real-time calculation of precision, recall, F1-score, specificity, and confusion matrix.
+* On-demand calculation of precision, recall, F1-score, specificity, and confusion matrix.
 * One-click export of structured evaluation reports as serialized JSON or formatted Markdown.
 
 ### 5. Knowledge Base Explorer
 * Complete visibility into the indexed clinical corpus (`dataset/raw/niddk_guiding_principles_diabetes.pdf`).
-* Real-time statistics: total chunks (277), embedding dimension (384), average chunk length, and clinical vs. reference chunk distribution.
+* Dynamic corpus statistics: total chunks (268), embedding dimension (384), average chunk length, and clinical vs. reference chunk distribution.
 * Searchable and paginated chunk inspector with metadata previews and direct source citations.
 
 ### 6. Holographic Heart Telemetry & Evidence Drawer
 * Interactive Three.js 3D Holographic Heart visualizer that reflects real-time system verification health.
 * Expandable Evidence Drawer displaying granular similarity distances, NLI logits, and page citations.
+
+---
+
+## 📸 Application Interface & Visual Showcase
+
+The MedGuide AI user interface is a responsive, dark-mode clinical workstation built with React 19, TypeScript, Tailwind CSS, and Three.js telemetry. The interface provides end-to-end transparency across retrieval, generation, NLI claim verification, and empirical benchmark evaluation.
+
+### 1. Clinical Evidence Intelligence Console & Telemetry
+![Clinical Q&A Dashboard](screenshots/dashboard_main.png)
+*Figure 1: Main clinical dashboard showing an answered diabetes inquiry with inline page citations (`[p.9]`, `[p.4]`), the self-correction status badge, and the interactive 3D Holographic Heart telemetry wireframe indicating real-time system state (`FLAGGED • SELF-CORRECTED`).*
+
+### 2. NLI Claim Verification & Evidence Audit Drawer
+![Claim Verification & Evidence Audit](screenshots/verification_evidence_drawer.png)
+*Figure 2: Granular claim-level verification view decomposing the response into 14 atomic clinical assertions, evaluating DeBERTa-v3 NLI entailment probabilities, and displaying the multidimensional confidence score (40% LOW) and hallucination classification.*
+
+### 3. Clinical Evaluation Lab & Benchmark Matrix
+![Evaluation Lab Benchmark & Confusion Matrix](screenshots/evaluation_lab_benchmark.png)
+*Figure 3: Interactive Evaluation Lab modal showing Benchmark v2.0 (Phase 2) evaluation over 15 curated gold regression probes, highlighting the 3×3 multi-class confusion matrix (Supported, Contradicted, Unsupported) and 100% specificity metric.*
+
+### 4. Knowledge Base Explorer & Chunk Telemetry
+![Knowledge Base Explorer](screenshots/knowledge_base_explorer.png)
+*Figure 4: Knowledge Base Explorer modal inspecting the active FAISS IndexFlatL2 vector database (268 total indexed chunks, 211 substantive clinical guidance chunks, 57 filtered bibliographic reference chunks across 83 pages of the NIDDK clinical guideline).*
 
 ---
 
@@ -741,7 +763,7 @@ All planned development milestones for the full-stack architecture are completed
 
 To ensure scientific honesty and ethical deployment, the following boundaries of this system must be recognized:
 
-1. **Single Clinical Guideline Scope:** The current knowledge base is specialized exclusively on the NIDDK Guiding Principles for Diabetes Care (83 pages, 277 chunks). The system is not trained to answer general medical, surgical, or pediatric questions outside diabetes management, and will correctly abstain when evidence is insufficient.
+1. **Single Clinical Guideline Scope:** The current knowledge base is specialized exclusively on the NIDDK Guiding Principles for Diabetes Care (83 pages, 268 chunks). The system is not trained to answer general medical, surgical, or pediatric questions outside diabetes management, and will correctly abstain when evidence is insufficient.
 2. **Educational & Research Prototype Only:** This system is an academic research demonstration of evidence-grounded RAG, hallucination detection, and self-correction. It is **not** an FDA-cleared, CE-marked, or clinically validated medical device, and must **never** be used as a substitute for professional clinical judgment, diagnosis, or treatment.
 3. **Cross-Encoder Context Truncation:** The `cross-encoder/nli-deberta-v3-base` model operates with a 384-token input window. Complex medical claims that rely on broader multi-paragraph contexts across distant chunk boundaries are bounded by individual chunk sizes (1000 characters).
 4. **LLM API & Latency Dependency:** Answer generation and self-correction depend on external Google Gemini API availability. Network latency or upstream rate limits (HTTP 429) may occasionally trigger model retries.
